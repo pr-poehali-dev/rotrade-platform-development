@@ -1,0 +1,13 @@
+{
+  "tests": [
+    {
+      "name": "Get all listings",
+      "method": "GET",
+      "expectedStatus": 200,
+      "expectedBody": {
+        "listings": "array"
+      },
+      "bodyMatcher": "partial"
+    }
+  ]
+}
