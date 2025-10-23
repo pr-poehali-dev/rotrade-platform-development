@@ -59,6 +59,7 @@ const Index = () => {
   const [messages, setMessages] = useState<Message[]>([]);
   const [messageInput, setMessageInput] = useState('');
   const [replyToId, setReplyToId] = useState<number | null>(null);
+  const [showEditProfile, setShowEditProfile] = useState(false);
 
   useEffect(() => {
     const user = localStorage.getItem('rotrade_user');
@@ -163,6 +164,57 @@ const Index = () => {
       audio.play();
       toast.success('Новое сообщение!');
       loadChats();
+    }
+  };
+
+  const handleImageUpload = (file: File): Promise<string> => {
+    return new Promise((resolve, reject) => {
+      if (!file.type.match(/^image\/(png|jpeg|jpg)$/)) {
+        reject(new Error('Только PNG и JPG форматы'));
+        return;
+      }
+      
+      const reader = new FileReader();
+      reader.onload = (e) => {
+        resolve(e.target?.result as string);
+      };
+      reader.onerror = reject;
+      reader.readAsDataURL(file);
+    });
+  };
+
+  const handleListingImageChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    
+    try {
+      const imageUrl = await handleImageUpload(file);
+      setNewListing({ ...newListing, imageUrl });
+      toast.success('Изображение загружено!');
+    } catch (error) {
+      toast.error('Ошибка загрузки изображения');
+    }
+  };
+
+  const handleAvatarChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file || !currentUser) return;
+    
+    try {
+      const avatar = await handleImageUpload(file);
+      const updatedUser = { ...currentUser, avatar };
+      
+      const users = JSON.parse(localStorage.getItem('rotrade_users') || '[]');
+      const userIndex = users.findIndex((u: User) => u.id === currentUser.id);
+      if (userIndex !== -1) {
+        users[userIndex] = updatedUser;
+        localStorage.setItem('rotrade_users', JSON.stringify(users));
+        localStorage.setItem('rotrade_user', JSON.stringify(updatedUser));
+        setCurrentUser(updatedUser);
+        toast.success('Аватар обновлён!');
+      }
+    } catch (error) {
+      toast.error('Ошибка загрузки аватара');
     }
   };
 
@@ -501,10 +553,21 @@ const Index = () => {
         <TabsContent value="profile">
           <Card className="max-w-2xl mx-auto p-8">
             <div className="text-center space-y-6">
-              <Avatar className="w-24 h-24 mx-auto">
-                <AvatarImage src={currentUser?.avatar} />
-                <AvatarFallback className="text-2xl">{currentUser?.username[0]}</AvatarFallback>
-              </Avatar>
+              <div className="relative w-24 h-24 mx-auto">
+                <Avatar className="w-24 h-24">
+                  <AvatarImage src={currentUser?.avatar} />
+                  <AvatarFallback className="text-2xl">{currentUser?.username[0]}</AvatarFallback>
+                </Avatar>
+                <label className="absolute bottom-0 right-0 bg-primary text-primary-foreground p-2 rounded-full cursor-pointer hover:bg-primary/90 transition-colors">
+                  <Icon name="Camera" size={16} />
+                  <input
+                    type="file"
+                    accept="image/png,image/jpeg,image/jpg"
+                    onChange={handleAvatarChange}
+                    className="hidden"
+                  />
+                </label>
+              </div>
               <div>
                 <h2 className="text-2xl font-bold">{currentUser?.username}</h2>
                 <p className="text-muted-foreground">ID: {currentUser?.id}</p>
@@ -547,11 +610,24 @@ const Index = () => {
               onChange={(e) => setNewListing({ ...newListing, description: e.target.value })}
               rows={4}
             />
-            <Input
-              placeholder="URL изображения (необязательно)"
-              value={newListing.imageUrl}
-              onChange={(e) => setNewListing({ ...newListing, imageUrl: e.target.value })}
-            />
+            <div className="space-y-2">
+              <label className="block text-sm font-medium">Изображение</label>
+              <div className="flex gap-2">
+                <Input
+                  type="file"
+                  accept="image/png,image/jpeg,image/jpg"
+                  onChange={handleListingImageChange}
+                  className="flex-1"
+                />
+              </div>
+              {newListing.imageUrl && (
+                <img
+                  src={newListing.imageUrl}
+                  alt="Предпросмотр"
+                  className="w-full h-32 object-cover rounded-lg"
+                />
+              )}
+            </div>
             <Button onClick={createListing} className="w-full">
               Создать
             </Button>
