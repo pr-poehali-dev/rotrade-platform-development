@@ -42,6 +42,16 @@ interface Chat {
   unreadCount: number;
 }
 
+interface Report {
+  id: number;
+  reporterId: number;
+  reporterUsername: string;
+  reportedUserId: number;
+  reportedUsername: string;
+  reason: string;
+  createdAt: string;
+}
+
 const Index = () => {
   const [currentUser, setCurrentUser] = useState<User | null>(null);
   const [showAuth, setShowAuth] = useState(true);
@@ -60,6 +70,13 @@ const Index = () => {
   const [messageInput, setMessageInput] = useState('');
   const [replyToId, setReplyToId] = useState<number | null>(null);
   const [showEditProfile, setShowEditProfile] = useState(false);
+  const [showReportDialog, setShowReportDialog] = useState(false);
+  const [reportReason, setReportReason] = useState('');
+  const [soundEnabled, setSoundEnabled] = useState(true);
+  const [blockedUsers, setBlockedUsers] = useState<number[]>([]);
+  const [reports, setReports] = useState<Report[]>([]);
+
+  const SUPPORT_ACCOUNT_NAME = 'RoTradeAc';
 
   useEffect(() => {
     const user = localStorage.getItem('rotrade_user');
@@ -68,6 +85,12 @@ const Index = () => {
       setShowAuth(false);
       loadListings();
       loadChats();
+      loadBlockedUsers();
+      loadReports();
+      const savedSound = localStorage.getItem('rotrade_sound_enabled');
+      if (savedSound !== null) {
+        setSoundEnabled(JSON.parse(savedSound));
+      }
     }
   }, []);
 
@@ -159,12 +182,117 @@ const Index = () => {
       !messages.find(m => m.id === msg.id)
     );
     
-    if (newMessages.length > 0) {
+    if (newMessages.length > 0 && soundEnabled) {
       const audio = new Audio('data:audio/wav;base64,UklGRnoGAABXQVZFZm10IBAAAAABAAEAQB8AAEAfAAABAAgAZGF0YQoGAACBhYqFbF1fdJivrJBhNjVgodDbq2EcBj+a2/LDciUFLIHO8tiJNwgZaLvt559NEAxQp+PwtmMcBjiR1/LMeSwFJHfH8N2QQAoUXrTp66hVFApGn+DyvmwhBSuByvLaizsIGGS36eahUQ4QUqzn77BdGAg+ltryxngsBSh+zPDYjT0JGW26...');
       audio.play();
       toast.success('Новое сообщение!');
       loadChats();
     }
+  };
+
+  const loadBlockedUsers = () => {
+    if (!currentUser) return;
+    const blocked = JSON.parse(localStorage.getItem(`rotrade_blocked_${currentUser.id}`) || '[]');
+    setBlockedUsers(blocked);
+  };
+
+  const loadReports = () => {
+    if (!currentUser) return;
+    const allReports = JSON.parse(localStorage.getItem('rotrade_reports') || '[]');
+    setReports(allReports);
+  };
+
+  const toggleSound = () => {
+    const newValue = !soundEnabled;
+    setSoundEnabled(newValue);
+    localStorage.setItem('rotrade_sound_enabled', JSON.stringify(newValue));
+    toast.success(newValue ? 'Звук включен' : 'Звук выключен');
+  };
+
+  const blockUser = (userId: number) => {
+    if (!currentUser) return;
+    const updated = [...blockedUsers, userId];
+    setBlockedUsers(updated);
+    localStorage.setItem(`rotrade_blocked_${currentUser.id}`, JSON.stringify(updated));
+    toast.success('Пользователь заблокирован');
+  };
+
+  const unblockUser = (userId: number) => {
+    if (!currentUser) return;
+    const updated = blockedUsers.filter(id => id !== userId);
+    setBlockedUsers(updated);
+    localStorage.setItem(`rotrade_blocked_${currentUser.id}`, JSON.stringify(updated));
+    toast.success('Пользователь разблокирован');
+  };
+
+  const submitReport = () => {
+    if (!currentUser || !activeChat || !reportReason.trim()) {
+      toast.error('Укажите причину жалобы');
+      return;
+    }
+
+    const users = JSON.parse(localStorage.getItem('rotrade_users') || '[]');
+    const reportedUser = users.find((u: User) => u.id === activeChat);
+    const supportUser = users.find((u: User) => u.username === SUPPORT_ACCOUNT_NAME);
+
+    if (!reportedUser) return;
+
+    const report: Report = {
+      id: Date.now(),
+      reporterId: currentUser.id,
+      reporterUsername: currentUser.username,
+      reportedUserId: activeChat,
+      reportedUsername: reportedUser.username,
+      reason: reportReason,
+      createdAt: new Date().toISOString()
+    };
+
+    const allReports = JSON.parse(localStorage.getItem('rotrade_reports') || '[]');
+    allReports.push(report);
+    localStorage.setItem('rotrade_reports', JSON.stringify(allReports));
+
+    if (supportUser) {
+      const supportMessage: Message = {
+        id: Date.now() + 1,
+        fromUserId: currentUser.id,
+        toUserId: supportUser.id,
+        content: `Жалоба на пользователя ${reportedUser.username}: ${reportReason}`,
+        createdAt: new Date().toISOString()
+      };
+
+      const allMessages = JSON.parse(localStorage.getItem('rotrade_messages') || '[]');
+      allMessages.push(supportMessage);
+      localStorage.setItem('rotrade_messages', JSON.stringify(allMessages));
+    }
+
+    setReportReason('');
+    setShowReportDialog(false);
+    toast.success('Жалоба отправлена в поддержку');
+    loadReports();
+  };
+
+  const removeReport = (reportId: number) => {
+    const updated = reports.filter(r => r.id !== reportId);
+    localStorage.setItem('rotrade_reports', JSON.stringify(updated));
+    setReports(updated);
+    toast.success('Жалоба удалена');
+  };
+
+  const deleteUserAccount = (userId: number) => {
+    const users = JSON.parse(localStorage.getItem('rotrade_users') || '[]');
+    const updatedUsers = users.filter((u: User) => u.id !== userId);
+    localStorage.setItem('rotrade_users', JSON.stringify(updatedUsers));
+
+    const listingsData = JSON.parse(localStorage.getItem('rotrade_listings') || '[]');
+    const updatedListings = listingsData.filter((l: Listing) => l.userId !== userId);
+    localStorage.setItem('rotrade_listings', JSON.stringify(updatedListings));
+    setListings(updatedListings);
+
+    const updatedReports = reports.filter(r => r.reportedUserId !== userId);
+    localStorage.setItem('rotrade_reports', JSON.stringify(updatedReports));
+    setReports(updatedReports);
+
+    toast.success('Аккаунт удален навсегда');
   };
 
   const handleImageUpload = (file: File): Promise<string> => {
@@ -250,6 +378,10 @@ const Index = () => {
   };
 
   const startChat = (userId: number) => {
+    if (userId === currentUser?.id) {
+      toast.error('Нельзя писать самому себе');
+      return;
+    }
     setActiveChat(userId);
     setActiveTab('chats');
     loadMessages(userId);
@@ -268,6 +400,16 @@ const Index = () => {
   const sendMessage = () => {
     if (!currentUser || !activeChat || !messageInput) return;
 
+    if (activeChat === currentUser.id) {
+      toast.error('Нельзя писать самому себе');
+      return;
+    }
+
+    if (blockedUsers.includes(activeChat)) {
+      toast.error('Вы заблокировали этого пользователя');
+      return;
+    }
+
     const message: Message = {
       id: Date.now(),
       fromUserId: currentUser.id,
@@ -284,6 +426,14 @@ const Index = () => {
     setMessageInput('');
     setReplyToId(null);
     toast.success('Сообщение отправлено');
+  };
+
+  const deleteMessage = (messageId: number) => {
+    const allMessages = JSON.parse(localStorage.getItem('rotrade_messages') || '[]');
+    const updated = allMessages.filter((m: Message) => m.id !== messageId);
+    localStorage.setItem('rotrade_messages', JSON.stringify(updated));
+    setMessages(messages.filter(m => m.id !== messageId));
+    toast.success('Сообщение удалено');
   };
 
   const logout = () => {
@@ -353,7 +503,7 @@ const Index = () => {
       </header>
 
       <Tabs value={activeTab} onValueChange={setActiveTab} className="container mx-auto px-4 py-8">
-        <TabsList className="grid w-full grid-cols-4 mb-8">
+        <TabsList className="grid w-full grid-cols-5 mb-8">
           <TabsTrigger value="home">
             <Icon name="Home" size={16} className="mr-2" />
             Главная
@@ -369,6 +519,15 @@ const Index = () => {
               <Badge className="ml-2" variant="secondary">{chats.length}</Badge>
             )}
           </TabsTrigger>
+          {currentUser?.username === SUPPORT_ACCOUNT_NAME && (
+            <TabsTrigger value="support">
+              <Icon name="AlertCircle" size={16} className="mr-2" />
+              Поддержка
+              {reports.length > 0 && (
+                <Badge className="ml-2" variant="destructive">{reports.length}</Badge>
+              )}
+            </TabsTrigger>
+          )}
           <TabsTrigger value="profile">
             <Icon name="User" size={16} className="mr-2" />
             Профиль
@@ -490,6 +649,40 @@ const Index = () => {
             <Card className="md:col-span-2 p-4 flex flex-col h-[600px]">
               {activeChat ? (
                 <>
+                  <div className="flex items-center justify-between mb-4 pb-2 border-b">
+                    <h3 className="font-bold">
+                      {chats.find(c => c.userId === activeChat)?.username}
+                    </h3>
+                    <div className="flex gap-2">
+                      {!blockedUsers.includes(activeChat) ? (
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          onClick={() => blockUser(activeChat)}
+                        >
+                          <Icon name="Ban" size={14} className="mr-1" />
+                          Заблокировать
+                        </Button>
+                      ) : (
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          onClick={() => unblockUser(activeChat)}
+                        >
+                          <Icon name="CheckCircle" size={14} className="mr-1" />
+                          Разблокировать
+                        </Button>
+                      )}
+                      <Button
+                        size="sm"
+                        variant="destructive"
+                        onClick={() => setShowReportDialog(true)}
+                      >
+                        <Icon name="Flag" size={14} className="mr-1" />
+                        Пожаловаться
+                      </Button>
+                    </div>
+                  </div>
                   <div className="flex-1 overflow-y-auto space-y-4 mb-4">
                     {messages.map((msg) => (
                       <div
@@ -509,12 +702,22 @@ const Index = () => {
                             </div>
                           )}
                           <p>{msg.content}</p>
-                          <button
-                            onClick={() => setReplyToId(msg.id)}
-                            className="text-xs opacity-70 hover:opacity-100 mt-1"
-                          >
-                            Ответить
-                          </button>
+                          <div className="flex gap-2 mt-1">
+                            <button
+                              onClick={() => setReplyToId(msg.id)}
+                              className="text-xs opacity-70 hover:opacity-100"
+                            >
+                              Ответить
+                            </button>
+                            {msg.fromUserId === currentUser?.id && (
+                              <button
+                                onClick={() => deleteMessage(msg.id)}
+                                className="text-xs opacity-70 hover:opacity-100 text-destructive"
+                              >
+                                Удалить
+                              </button>
+                            )}
+                          </div>
                         </div>
                       </div>
                     ))}
@@ -550,6 +753,66 @@ const Index = () => {
           </div>
         </TabsContent>
 
+        {currentUser?.username === SUPPORT_ACCOUNT_NAME && (
+          <TabsContent value="support">
+            <Card className="p-6">
+              <h2 className="text-2xl font-bold mb-6">Жалобы пользователей</h2>
+              {reports.length === 0 ? (
+                <p className="text-center text-muted-foreground py-8">Нет активных жалоб</p>
+              ) : (
+                <div className="space-y-4">
+                  {reports.map((report) => (
+                    <Card key={report.id} className="p-4">
+                      <div className="flex justify-between items-start">
+                        <div className="flex-1">
+                          <div className="flex items-center gap-2 mb-2">
+                            <Badge variant="destructive">Жалоба</Badge>
+                            <span className="text-sm text-muted-foreground">
+                              {new Date(report.createdAt).toLocaleString('ru-RU')}
+                            </span>
+                          </div>
+                          <p className="font-medium mb-1">
+                            От: <span className="text-primary">{report.reporterUsername}</span> (ID: {report.reporterId})
+                          </p>
+                          <p className="font-medium mb-2">
+                            На: <span className="text-destructive">{report.reportedUsername}</span> (ID: {report.reportedUserId})
+                          </p>
+                          <p className="text-sm bg-muted p-3 rounded">
+                            <strong>Причина:</strong> {report.reason}
+                          </p>
+                        </div>
+                        <div className="flex flex-col gap-2 ml-4">
+                          <Button
+                            size="sm"
+                            variant="destructive"
+                            onClick={() => {
+                              if (confirm(`Удалить аккаунт ${report.reportedUsername} навсегда?`)) {
+                                deleteUserAccount(report.reportedUserId);
+                                removeReport(report.id);
+                              }
+                            }}
+                          >
+                            <Icon name="Trash2" size={14} className="mr-1" />
+                            Удалить аккаунт
+                          </Button>
+                          <Button
+                            size="sm"
+                            variant="outline"
+                            onClick={() => removeReport(report.id)}
+                          >
+                            <Icon name="X" size={14} className="mr-1" />
+                            Отклонить жалобу
+                          </Button>
+                        </div>
+                      </div>
+                    </Card>
+                  ))}
+                </div>
+              )}
+            </Card>
+          </TabsContent>
+        )}
+
         <TabsContent value="profile">
           <Card className="max-w-2xl mx-auto p-8">
             <div className="text-center space-y-6">
@@ -572,8 +835,19 @@ const Index = () => {
                 <h2 className="text-2xl font-bold">{currentUser?.username}</h2>
                 <p className="text-muted-foreground">ID: {currentUser?.id}</p>
               </div>
-              <div className="pt-6 border-t">
-                <h3 className="font-bold mb-4">Правила и условия</h3>
+              <div className="pt-6 border-t space-y-4">
+                <div className="flex items-center justify-between">
+                  <span className="font-medium">Звуковые уведомления</span>
+                  <Button
+                    variant={soundEnabled ? 'default' : 'outline'}
+                    size="sm"
+                    onClick={toggleSound}
+                  >
+                    <Icon name={soundEnabled ? 'Volume2' : 'VolumeX'} size={16} className="mr-2" />
+                    {soundEnabled ? 'Включены' : 'Выключены'}
+                  </Button>
+                </div>
+                <h3 className="font-bold mb-4 pt-4">Правила и условия</h3>
                 <p className="text-sm text-muted-foreground mb-4">
                   RoTrade — это платформа для размещения объявлений о скупке предметов в Roblox.
                   Все сделки осуществляются напрямую между пользователями.
@@ -630,6 +904,29 @@ const Index = () => {
             </div>
             <Button onClick={createListing} className="w-full">
               Создать
+            </Button>
+          </div>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={showReportDialog} onOpenChange={setShowReportDialog}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Пожаловаться на пользователя</DialogTitle>
+          </DialogHeader>
+          <div className="space-y-4">
+            <p className="text-sm text-muted-foreground">
+              Укажите причину жалобы. Жалоба будет отправлена в службу поддержки.
+            </p>
+            <Textarea
+              placeholder="Опишите причину жалобы..."
+              value={reportReason}
+              onChange={(e) => setReportReason(e.target.value)}
+              rows={4}
+            />
+            <Button onClick={submitReport} className="w-full">
+              <Icon name="Send" size={16} className="mr-2" />
+              Отправить жалобу
             </Button>
           </div>
         </DialogContent>
