@@ -14,6 +14,9 @@ interface User {
   id: number;
   username: string;
   avatar?: string;
+  createdAt?: string;
+  rating?: number;
+  reviewsCount?: number;
 }
 
 interface Listing {
@@ -23,6 +26,18 @@ interface Listing {
   title: string;
   description: string;
   imageUrl?: string;
+  gameUrl?: string;
+  gameName?: string;
+  createdAt: string;
+}
+
+interface Review {
+  id: number;
+  fromUserId: number;
+  fromUsername: string;
+  toUserId: number;
+  rating: number;
+  comment: string;
   createdAt: string;
 }
 
@@ -62,7 +77,7 @@ const Index = () => {
   const [activeTab, setActiveTab] = useState('home');
   const [listings, setListings] = useState<Listing[]>([]);
   const [showCreateListing, setShowCreateListing] = useState(false);
-  const [newListing, setNewListing] = useState({ title: '', description: '', imageUrl: '' });
+  const [newListing, setNewListing] = useState({ title: '', description: '', imageUrl: '', gameUrl: '' });
   
   const [chats, setChats] = useState<Chat[]>([]);
   const [activeChat, setActiveChat] = useState<number | null>(null);
@@ -75,6 +90,10 @@ const Index = () => {
   const [soundEnabled, setSoundEnabled] = useState(true);
   const [blockedUsers, setBlockedUsers] = useState<number[]>([]);
   const [reports, setReports] = useState<Report[]>([]);
+  const [showReviewDialog, setShowReviewDialog] = useState(false);
+  const [reviewRating, setReviewRating] = useState(5);
+  const [reviewComment, setReviewComment] = useState('');
+  const [reviews, setReviews] = useState<Review[]>([]);
 
   const SUPPORT_ACCOUNT_NAME = 'RoTradeAc';
 
@@ -87,6 +106,7 @@ const Index = () => {
       loadChats();
       loadBlockedUsers();
       loadReports();
+      loadReviews();
       const savedSound = localStorage.getItem('rotrade_sound_enabled');
       if (savedSound !== null) {
         setSoundEnabled(JSON.parse(savedSound));
@@ -120,7 +140,10 @@ const Index = () => {
       const newUser: User = {
         id: Date.now(),
         username,
-        avatar: `https://api.dicebear.com/7.x/avataaars/svg?seed=${username}`
+        avatar: `https://api.dicebear.com/7.x/avataaars/svg?seed=${username}`,
+        createdAt: new Date().toISOString(),
+        rating: 0,
+        reviewsCount: 0
       };
       
       users.push(newUser);
@@ -202,6 +225,50 @@ const Index = () => {
     setReports(allReports);
   };
 
+  const loadReviews = () => {
+    const allReviews = JSON.parse(localStorage.getItem('rotrade_reviews') || '[]');
+    setReviews(allReviews);
+  };
+
+  const extractGameName = (url: string): string | null => {
+    try {
+      const match = url.match(/\/games\/\d+\/([^/?]+)/);
+      if (match && match[1]) {
+        return decodeURIComponent(match[1].replace(/-/g, ' '));
+      }
+      return null;
+    } catch {
+      return null;
+    }
+  };
+
+  const getTimeSinceRegistration = (createdAt?: string): string => {
+    if (!createdAt) return 'Недавно';
+    const now = new Date();
+    const registered = new Date(createdAt);
+    const diffMs = now.getTime() - registered.getTime();
+    const diffDays = Math.floor(diffMs / (1000 * 60 * 60 * 24));
+    const diffMonths = Math.floor(diffDays / 30);
+    const diffYears = Math.floor(diffDays / 365);
+
+    if (diffYears > 0) return `${diffYears} ${diffYears === 1 ? 'год' : diffYears < 5 ? 'года' : 'лет'}`;
+    if (diffMonths > 0) return `${diffMonths} ${diffMonths === 1 ? 'месяц' : diffMonths < 5 ? 'месяца' : 'месяцев'}`;
+    if (diffDays > 0) return `${diffDays} ${diffDays === 1 ? 'день' : diffDays < 5 ? 'дня' : 'дней'}`;
+    return 'Сегодня';
+  };
+
+  const formatMessageTime = (timestamp: string): string => {
+    const date = new Date(timestamp);
+    return date.toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' });
+  };
+
+  const getUserRating = (userId: number): { rating: number; count: number } => {
+    const userReviews = reviews.filter(r => r.toUserId === userId);
+    if (userReviews.length === 0) return { rating: 0, count: 0 };
+    const avgRating = userReviews.reduce((sum, r) => sum + r.rating, 0) / userReviews.length;
+    return { rating: Math.round(avgRating * 10) / 10, count: userReviews.length };
+  };
+
   const toggleSound = () => {
     const newValue = !soundEnabled;
     setSoundEnabled(newValue);
@@ -214,7 +281,20 @@ const Index = () => {
     const updated = [...blockedUsers, userId];
     setBlockedUsers(updated);
     localStorage.setItem(`rotrade_blocked_${currentUser.id}`, JSON.stringify(updated));
-    toast.success('Пользователь заблокирован');
+    
+    const allMessages = JSON.parse(localStorage.getItem('rotrade_messages') || '[]');
+    const filteredMessages = allMessages.filter((msg: Message) => 
+      !(msg.fromUserId === currentUser.id && msg.toUserId === userId) &&
+      !(msg.fromUserId === userId && msg.toUserId === currentUser.id)
+    );
+    localStorage.setItem('rotrade_messages', JSON.stringify(filteredMessages));
+    
+    if (activeChat === userId) {
+      setActiveChat(null);
+      setMessages([]);
+    }
+    loadChats();
+    toast.success('Пользователь заблокирован, чат удалён');
   };
 
   const unblockUser = (userId: number) => {
@@ -295,6 +375,46 @@ const Index = () => {
     toast.success('Аккаунт удален навсегда');
   };
 
+  const submitReview = () => {
+    if (!currentUser || !activeChat || !reviewComment.trim()) {
+      toast.error('Заполните комментарий');
+      return;
+    }
+
+    const users = JSON.parse(localStorage.getItem('rotrade_users') || '[]');
+    const targetUser = users.find((u: User) => u.id === activeChat);
+    if (!targetUser) return;
+
+    const review: Review = {
+      id: Date.now(),
+      fromUserId: currentUser.id,
+      fromUsername: currentUser.username,
+      toUserId: activeChat,
+      rating: reviewRating,
+      comment: reviewComment,
+      createdAt: new Date().toISOString()
+    };
+
+    const allReviews = JSON.parse(localStorage.getItem('rotrade_reviews') || '[]');
+    allReviews.push(review);
+    localStorage.setItem('rotrade_reviews', JSON.stringify(allReviews));
+
+    const userIndex = users.findIndex((u: User) => u.id === activeChat);
+    if (userIndex !== -1) {
+      const userReviews = allReviews.filter((r: Review) => r.toUserId === activeChat);
+      const avgRating = userReviews.reduce((sum: number, r: Review) => sum + r.rating, 0) / userReviews.length;
+      users[userIndex].rating = Math.round(avgRating * 10) / 10;
+      users[userIndex].reviewsCount = userReviews.length;
+      localStorage.setItem('rotrade_users', JSON.stringify(users));
+    }
+
+    setReviewRating(5);
+    setReviewComment('');
+    setShowReviewDialog(false);
+    loadReviews();
+    toast.success('Отзыв отправлен!');
+  };
+
   const handleImageUpload = (file: File): Promise<string> => {
     return new Promise((resolve, reject) => {
       if (!file.type.match(/^image\/(png|jpeg|jpg)$/)) {
@@ -352,6 +472,15 @@ const Index = () => {
       return;
     }
 
+    let gameName = null;
+    if (newListing.gameUrl) {
+      gameName = extractGameName(newListing.gameUrl);
+      if (!gameName) {
+        toast.error('Неверная ссылка на игру Roblox');
+        return;
+      }
+    }
+
     const listing: Listing = {
       id: Date.now(),
       userId: currentUser.id,
@@ -359,13 +488,15 @@ const Index = () => {
       title: newListing.title,
       description: newListing.description,
       imageUrl: newListing.imageUrl || 'https://images.unsplash.com/photo-1614680376739-414d95ff43df?w=400',
+      gameUrl: newListing.gameUrl,
+      gameName: gameName || undefined,
       createdAt: new Date().toISOString()
     };
 
     const updated = [...listings, listing];
     setListings(updated);
     localStorage.setItem('rotrade_listings', JSON.stringify(updated));
-    setNewListing({ title: '', description: '', imageUrl: '' });
+    setNewListing({ title: '', description: '', imageUrl: '', gameUrl: '' });
     setShowCreateListing(false);
     toast.success('Объявление создано!');
   };
@@ -556,6 +687,12 @@ const Index = () => {
                   />
                   <div className="p-4">
                     <h3 className="font-bold mb-2">{listing.title}</h3>
+                    {listing.gameName && (
+                      <Badge className="mb-2" variant="secondary">
+                        <Icon name="Gamepad2" size={12} className="mr-1" />
+                        {listing.gameName}
+                      </Badge>
+                    )}
                     <p className="text-sm text-muted-foreground mb-4 line-clamp-2">
                       {listing.description}
                     </p>
@@ -592,6 +729,12 @@ const Index = () => {
                   />
                   <div className="p-4">
                     <h3 className="font-bold mb-2">{listing.title}</h3>
+                    {listing.gameName && (
+                      <Badge className="mb-2" variant="secondary">
+                        <Icon name="Gamepad2" size={12} className="mr-1" />
+                        {listing.gameName}
+                      </Badge>
+                    )}
                     <p className="text-sm text-muted-foreground mb-4">
                       {listing.description}
                     </p>
@@ -702,6 +845,7 @@ const Index = () => {
                             </div>
                           )}
                           <p>{msg.content}</p>
+                          <p className="text-xs opacity-60 mt-1">{formatMessageTime(msg.createdAt)}</p>
                           <div className="flex gap-2 mt-1">
                             <button
                               onClick={() => setReplyToId(msg.id)}
@@ -739,6 +883,9 @@ const Index = () => {
                       onChange={(e) => setMessageInput(e.target.value)}
                       onKeyPress={(e) => e.key === 'Enter' && sendMessage()}
                     />
+                    <Button onClick={() => setShowReviewDialog(true)} variant="outline">
+                      <Icon name="Star" size={16} />
+                    </Button>
                     <Button onClick={sendMessage}>
                       <Icon name="Send" size={16} />
                     </Button>
@@ -834,7 +981,46 @@ const Index = () => {
               <div>
                 <h2 className="text-2xl font-bold">{currentUser?.username}</h2>
                 <p className="text-muted-foreground">ID: {currentUser?.id}</p>
+                <div className="flex items-center justify-center gap-4 mt-4">
+                  <div className="text-center">
+                    <p className="text-sm text-muted-foreground">На сайте</p>
+                    <p className="font-bold">{getTimeSinceRegistration(currentUser?.createdAt)}</p>
+                  </div>
+                  <div className="text-center">
+                    <p className="text-sm text-muted-foreground">Рейтинг</p>
+                    <div className="flex items-center justify-center gap-1">
+                      <Icon name="Star" size={16} className="text-yellow-500" />
+                      <p className="font-bold">
+                        {getUserRating(currentUser?.id || 0).rating.toFixed(1)} ({getUserRating(currentUser?.id || 0).count})
+                      </p>
+                    </div>
+                  </div>
+                </div>
               </div>
+              
+              {reviews.filter(r => r.toUserId === currentUser?.id).length > 0 && (
+                <div className="pt-6 border-t">
+                  <h3 className="font-bold mb-4">Отзывы</h3>
+                  <div className="space-y-3 max-h-60 overflow-y-auto">
+                    {reviews.filter(r => r.toUserId === currentUser?.id).map((review) => (
+                      <Card key={review.id} className="p-3">
+                        <div className="flex items-start justify-between mb-2">
+                          <span className="font-medium text-sm">{review.fromUsername}</span>
+                          <div className="flex items-center gap-1">
+                            {Array.from({ length: review.rating }).map((_, i) => (
+                              <Icon key={i} name="Star" size={12} className="text-yellow-500 fill-yellow-500" />
+                            ))}
+                          </div>
+                        </div>
+                        <p className="text-sm text-muted-foreground">{review.comment}</p>
+                        <p className="text-xs text-muted-foreground mt-1">
+                          {new Date(review.createdAt).toLocaleDateString('ru-RU')}
+                        </p>
+                      </Card>
+                    ))}
+                  </div>
+                </div>
+              )}
               <div className="pt-6 border-t space-y-4">
                 <div className="flex items-center justify-between">
                   <span className="font-medium">Звуковые уведомления</span>
@@ -902,6 +1088,17 @@ const Index = () => {
                 />
               )}
             </div>
+            <div className="space-y-2">
+              <label className="block text-sm font-medium">Игра Roblox (необязательно)</label>
+              <Input
+                placeholder="https://www.roblox.com/games/1537690962/Bee-Swarm-Simulator"
+                value={newListing.gameUrl}
+                onChange={(e) => setNewListing({ ...newListing, gameUrl: e.target.value })}
+              />
+              <p className="text-xs text-muted-foreground">
+                Вставьте ссылку на игру, где будет сделка
+              </p>
+            </div>
             <Button onClick={createListing} className="w-full">
               Создать
             </Button>
@@ -927,6 +1124,47 @@ const Index = () => {
             <Button onClick={submitReport} className="w-full">
               <Icon name="Send" size={16} className="mr-2" />
               Отправить жалобу
+            </Button>
+          </div>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={showReviewDialog} onOpenChange={setShowReviewDialog}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Оставить отзыв</DialogTitle>
+          </DialogHeader>
+          <div className="space-y-4">
+            <div className="space-y-2">
+              <label className="block text-sm font-medium">Рейтинг</label>
+              <div className="flex gap-2 justify-center">
+                {[1, 2, 3, 4, 5].map((star) => (
+                  <button
+                    key={star}
+                    onClick={() => setReviewRating(star)}
+                    className="transition-transform hover:scale-110"
+                  >
+                    <Icon
+                      name="Star"
+                      size={32}
+                      className={star <= reviewRating ? 'text-yellow-500 fill-yellow-500' : 'text-gray-400'}
+                    />
+                  </button>
+                ))}
+              </div>
+              <p className="text-center text-sm text-muted-foreground">
+                {reviewRating} из 5 звёзд
+              </p>
+            </div>
+            <Textarea
+              placeholder="Расскажите о сделке..."
+              value={reviewComment}
+              onChange={(e) => setReviewComment(e.target.value)}
+              rows={4}
+            />
+            <Button onClick={submitReview} className="w-full">
+              <Icon name="Send" size={16} className="mr-2" />
+              Отправить отзыв
             </Button>
           </div>
         </DialogContent>
