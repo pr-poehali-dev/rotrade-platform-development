@@ -29,6 +29,8 @@ interface Listing {
   gameUrl?: string;
   gameName?: string;
   createdAt: string;
+  views?: number;
+  expiresAt: string;
 }
 
 interface Review {
@@ -61,8 +63,10 @@ interface Report {
   id: number;
   reporterId: number;
   reporterUsername: string;
-  reportedUserId: number;
-  reportedUsername: string;
+  reportedUserId?: number;
+  reportedUsername?: string;
+  listingId?: number;
+  listingTitle?: string;
   reason: string;
   createdAt: string;
 }
@@ -78,6 +82,11 @@ const Index = () => {
   const [listings, setListings] = useState<Listing[]>([]);
   const [showCreateListing, setShowCreateListing] = useState(false);
   const [newListing, setNewListing] = useState({ title: '', description: '', imageUrl: '', gameUrl: '' });
+  const [searchQuery, setSearchQuery] = useState('');
+  const [selectedTag, setSelectedTag] = useState<string | null>(null);
+  const [showReportListingDialog, setShowReportListingDialog] = useState(false);
+  const [reportListingId, setReportListingId] = useState<number | null>(null);
+  const [reportListingReason, setReportListingReason] = useState('');
   
   const [chats, setChats] = useState<Chat[]>([]);
   const [activeChat, setActiveChat] = useState<number | null>(null);
@@ -116,10 +125,18 @@ const Index = () => {
 
   useEffect(() => {
     if (!showAuth) {
-      const interval = setInterval(() => {
+      const messagesInterval = setInterval(() => {
         checkNewMessages();
       }, 3000);
-      return () => clearInterval(interval);
+      
+      const listingsInterval = setInterval(() => {
+        loadListings();
+      }, 2000);
+      
+      return () => {
+        clearInterval(messagesInterval);
+        clearInterval(listingsInterval);
+      };
     }
   }, [showAuth, chats]);
 
@@ -168,7 +185,18 @@ const Index = () => {
   const loadListings = () => {
     const saved = localStorage.getItem('rotrade_listings');
     if (saved) {
-      setListings(JSON.parse(saved));
+      const allListings: Listing[] = JSON.parse(saved);
+      const now = new Date();
+      const validListings = allListings.filter(listing => {
+        const expiresAt = new Date(listing.expiresAt);
+        return expiresAt > now;
+      });
+      
+      if (validListings.length !== allListings.length) {
+        localStorage.setItem('rotrade_listings', JSON.stringify(validListings));
+      }
+      
+      setListings(validListings);
     }
   };
 
@@ -481,6 +509,9 @@ const Index = () => {
       }
     }
 
+    const now = new Date();
+    const expiresAt = new Date(now.getTime() + 24 * 24 * 60 * 60 * 1000);
+
     const listing: Listing = {
       id: Date.now(),
       userId: currentUser.id,
@@ -490,7 +521,9 @@ const Index = () => {
       imageUrl: newListing.imageUrl || 'https://images.unsplash.com/photo-1614680376739-414d95ff43df?w=400',
       gameUrl: newListing.gameUrl,
       gameName: gameName || undefined,
-      createdAt: new Date().toISOString()
+      createdAt: now.toISOString(),
+      views: 0,
+      expiresAt: expiresAt.toISOString()
     };
 
     const updated = [...listings, listing];
@@ -508,11 +541,27 @@ const Index = () => {
     toast.success('Объявление удалено');
   };
 
-  const startChat = (userId: number) => {
+  const incrementListingViews = (listingId: number) => {
+    const allListings = JSON.parse(localStorage.getItem('rotrade_listings') || '[]');
+    const listingIndex = allListings.findIndex((l: Listing) => l.id === listingId);
+    
+    if (listingIndex !== -1) {
+      allListings[listingIndex].views = (allListings[listingIndex].views || 0) + 1;
+      localStorage.setItem('rotrade_listings', JSON.stringify(allListings));
+      setListings(allListings);
+    }
+  };
+
+  const startChat = (userId: number, listingId?: number) => {
     if (userId === currentUser?.id) {
       toast.error('Нельзя писать самому себе');
       return;
     }
+    
+    if (listingId) {
+      incrementListingViews(listingId);
+    }
+    
     setActiveChat(userId);
     setActiveTab('chats');
     loadMessages(userId);
@@ -565,6 +614,114 @@ const Index = () => {
     localStorage.setItem('rotrade_messages', JSON.stringify(updated));
     setMessages(messages.filter(m => m.id !== messageId));
     toast.success('Сообщение удалено');
+  };
+
+  const submitListingReport = () => {
+    if (!currentUser || !reportListingId || !reportListingReason.trim()) {
+      toast.error('Укажите причину жалобы');
+      return;
+    }
+
+    const listing = listings.find(l => l.id === reportListingId);
+    if (!listing) return;
+
+    const users = JSON.parse(localStorage.getItem('rotrade_users') || '[]');
+    const supportUser = users.find((u: User) => u.username === SUPPORT_ACCOUNT_NAME);
+
+    const report: Report = {
+      id: Date.now(),
+      reporterId: currentUser.id,
+      reporterUsername: currentUser.username,
+      listingId: reportListingId,
+      listingTitle: listing.title,
+      reason: reportListingReason,
+      createdAt: new Date().toISOString()
+    };
+
+    const allReports = JSON.parse(localStorage.getItem('rotrade_reports') || '[]');
+    allReports.push(report);
+    localStorage.setItem('rotrade_reports', JSON.stringify(allReports));
+
+    if (supportUser) {
+      const supportMessage: Message = {
+        id: Date.now() + 1,
+        fromUserId: currentUser.id,
+        toUserId: supportUser.id,
+        content: `Жалоба на объявление "${listing.title}": ${reportListingReason}`,
+        createdAt: new Date().toISOString()
+      };
+
+      const allMessages = JSON.parse(localStorage.getItem('rotrade_messages') || '[]');
+      allMessages.push(supportMessage);
+      localStorage.setItem('rotrade_messages', JSON.stringify(allMessages));
+    }
+
+    setReportListingReason('');
+    setReportListingId(null);
+    setShowReportListingDialog(false);
+    toast.success('Жалоба на объявление отправлена');
+    loadReports();
+  };
+
+  const getListingTags = (): string[] => {
+    const tags = new Set<string>();
+    listings.forEach(listing => {
+      const text = `${listing.title} ${listing.description}`.toLowerCase();
+      const words = text.split(/\s+/);
+      words.forEach(word => {
+        if (word.length > 3) {
+          tags.add(word);
+        }
+      });
+      if (listing.gameName) {
+        tags.add(listing.gameName.toLowerCase());
+      }
+    });
+    return Array.from(tags).slice(0, 20);
+  };
+
+  const getFilteredListings = (): Listing[] => {
+    let filtered = listings;
+
+    if (searchQuery.trim()) {
+      const query = searchQuery.toLowerCase();
+      filtered = filtered.filter(listing => 
+        listing.title.toLowerCase().includes(query) ||
+        listing.description.toLowerCase().includes(query) ||
+        listing.gameName?.toLowerCase().includes(query)
+      );
+    }
+
+    if (selectedTag) {
+      filtered = filtered.filter(listing => 
+        listing.title.toLowerCase().includes(selectedTag) ||
+        listing.description.toLowerCase().includes(selectedTag) ||
+        listing.gameName?.toLowerCase().includes(selectedTag)
+      );
+    }
+
+    return filtered;
+  };
+
+  const getUserListings = (): Listing[] => {
+    if (!currentUser) return [];
+    return listings.filter(l => l.userId === currentUser.id);
+  };
+
+  const getTimeUntilExpiration = (expiresAt: string): string => {
+    const now = new Date();
+    const expires = new Date(expiresAt);
+    const diffMs = expires.getTime() - now.getTime();
+    const diffDays = Math.floor(diffMs / (1000 * 60 * 60 * 24));
+    const diffHours = Math.floor((diffMs % (1000 * 60 * 60 * 24)) / (1000 * 60 * 60));
+
+    if (diffDays > 0) {
+      return `${diffDays}д ${diffHours}ч`;
+    } else if (diffHours > 0) {
+      return `${diffHours}ч`;
+    } else {
+      return 'Скоро истечёт';
+    }
   };
 
   const logout = () => {
@@ -634,7 +791,7 @@ const Index = () => {
       </header>
 
       <Tabs value={activeTab} onValueChange={setActiveTab} className="container mx-auto px-4 py-8">
-        <TabsList className="grid w-full grid-cols-5 mb-8">
+        <TabsList className={`grid w-full ${currentUser?.username === SUPPORT_ACCOUNT_NAME ? 'grid-cols-6' : 'grid-cols-5'} mb-8`}>
           <TabsTrigger value="home">
             <Icon name="Home" size={16} className="mr-2" />
             Главная
@@ -642,6 +799,13 @@ const Index = () => {
           <TabsTrigger value="listings">
             <Icon name="Package" size={16} className="mr-2" />
             Объявления
+          </TabsTrigger>
+          <TabsTrigger value="mylistings">
+            <Icon name="List" size={16} className="mr-2" />
+            Мои
+            {getUserListings().length > 0 && (
+              <Badge className="ml-2" variant="secondary">{getUserListings().length}</Badge>
+            )}
           </TabsTrigger>
           <TabsTrigger value="chats">
             <Icon name="MessageSquare" size={16} className="mr-2" />
@@ -719,8 +883,36 @@ const Index = () => {
               </Button>
             </div>
 
+            <div className="space-y-4">
+              <Input
+                placeholder="Поиск по названию, описанию или игре..."
+                value={searchQuery}
+                onChange={(e) => setSearchQuery(e.target.value)}
+              />
+              
+              <div className="flex gap-2 flex-wrap">
+                <Button
+                  size="sm"
+                  variant={selectedTag === null ? 'default' : 'outline'}
+                  onClick={() => setSelectedTag(null)}
+                >
+                  Все
+                </Button>
+                {getListingTags().map((tag) => (
+                  <Button
+                    key={tag}
+                    size="sm"
+                    variant={selectedTag === tag ? 'default' : 'outline'}
+                    onClick={() => setSelectedTag(tag)}
+                  >
+                    {tag}
+                  </Button>
+                ))}
+              </div>
+            </div>
+
             <div className="grid md:grid-cols-3 gap-6">
-              {listings.map((listing) => (
+              {getFilteredListings().map((listing) => (
                 <Card key={listing.id} className="overflow-hidden hover:shadow-lg transition-shadow">
                   <img
                     src={listing.imageUrl}
@@ -735,7 +927,7 @@ const Index = () => {
                         {listing.gameName}
                       </Badge>
                     )}
-                    <p className="text-sm text-muted-foreground mb-4">
+                    <p className="text-sm text-muted-foreground mb-4 line-clamp-2">
                       {listing.description}
                     </p>
                     <div className="flex items-center justify-between">
@@ -749,15 +941,94 @@ const Index = () => {
                           Удалить
                         </Button>
                       ) : (
-                        <Button size="sm" onClick={() => startChat(listing.userId)}>
-                          Связаться
-                        </Button>
+                        <div className="flex gap-2">
+                          <Button
+                            size="sm"
+                            variant="outline"
+                            onClick={() => {
+                              setReportListingId(listing.id);
+                              setShowReportListingDialog(true);
+                            }}
+                          >
+                            <Icon name="Flag" size={14} />
+                          </Button>
+                          <Button size="sm" onClick={() => startChat(listing.userId, listing.id)}>
+                            Связаться
+                          </Button>
+                        </div>
                       )}
                     </div>
                   </div>
                 </Card>
               ))}
             </div>
+
+            {getFilteredListings().length === 0 && (
+              <div className="text-center py-12 text-muted-foreground">
+                Объявления не найдены
+              </div>
+            )}
+          </div>
+        </TabsContent>
+
+        <TabsContent value="mylistings">
+          <div className="space-y-6">
+            <div className="flex justify-between items-center">
+              <h2 className="text-2xl font-bold">Мои объявления</h2>
+              <Button onClick={() => setShowCreateListing(true)}>
+                <Icon name="Plus" size={16} className="mr-2" />
+                Создать объявление
+              </Button>
+            </div>
+
+            <div className="grid md:grid-cols-2 lg:grid-cols-3 gap-6">
+              {getUserListings().map((listing) => (
+                <Card key={listing.id} className="overflow-hidden">
+                  <img
+                    src={listing.imageUrl}
+                    alt={listing.title}
+                    className="w-full h-48 object-cover"
+                  />
+                  <div className="p-4 space-y-3">
+                    <h3 className="font-bold">{listing.title}</h3>
+                    {listing.gameName && (
+                      <Badge variant="secondary">
+                        <Icon name="Gamepad2" size={12} className="mr-1" />
+                        {listing.gameName}
+                      </Badge>
+                    )}
+                    <p className="text-sm text-muted-foreground line-clamp-2">
+                      {listing.description}
+                    </p>
+                    <div className="flex items-center gap-4 text-sm text-muted-foreground">
+                      <div className="flex items-center gap-1">
+                        <Icon name="Eye" size={14} />
+                        <span>{listing.views || 0} просмотров</span>
+                      </div>
+                      <div className="flex items-center gap-1">
+                        <Icon name="Clock" size={14} />
+                        <span>{getTimeUntilExpiration(listing.expiresAt)}</span>
+                      </div>
+                    </div>
+                    <Button
+                      size="sm"
+                      variant="destructive"
+                      className="w-full"
+                      onClick={() => removeListing(listing.id)}
+                    >
+                      <Icon name="Trash2" size={14} className="mr-2" />
+                      Удалить
+                    </Button>
+                  </div>
+                </Card>
+              ))}
+            </div>
+
+            {getUserListings().length === 0 && (
+              <div className="text-center py-12 text-muted-foreground">
+                У вас пока нет объявлений
+              </div>
+            )}
           </div>
         </TabsContent>
 
@@ -913,7 +1184,9 @@ const Index = () => {
                       <div className="flex justify-between items-start">
                         <div className="flex-1">
                           <div className="flex items-center gap-2 mb-2">
-                            <Badge variant="destructive">Жалоба</Badge>
+                            <Badge variant="destructive">
+                              {report.listingId ? 'Жалоба на объявление' : 'Жалоба на пользователя'}
+                            </Badge>
                             <span className="text-sm text-muted-foreground">
                               {new Date(report.createdAt).toLocaleString('ru-RU')}
                             </span>
@@ -921,27 +1194,51 @@ const Index = () => {
                           <p className="font-medium mb-1">
                             От: <span className="text-primary">{report.reporterUsername}</span> (ID: {report.reporterId})
                           </p>
-                          <p className="font-medium mb-2">
-                            На: <span className="text-destructive">{report.reportedUsername}</span> (ID: {report.reportedUserId})
-                          </p>
+                          {report.listingId ? (
+                            <p className="font-medium mb-2">
+                              Объявление: <span className="text-destructive">{report.listingTitle}</span> (ID: {report.listingId})
+                            </p>
+                          ) : (
+                            <p className="font-medium mb-2">
+                              На: <span className="text-destructive">{report.reportedUsername}</span> (ID: {report.reportedUserId})
+                            </p>
+                          )}
                           <p className="text-sm bg-muted p-3 rounded">
                             <strong>Причина:</strong> {report.reason}
                           </p>
                         </div>
                         <div className="flex flex-col gap-2 ml-4">
-                          <Button
-                            size="sm"
-                            variant="destructive"
-                            onClick={() => {
-                              if (confirm(`Удалить аккаунт ${report.reportedUsername} навсегда?`)) {
-                                deleteUserAccount(report.reportedUserId);
-                                removeReport(report.id);
-                              }
-                            }}
-                          >
-                            <Icon name="Trash2" size={14} className="mr-1" />
-                            Удалить аккаунт
-                          </Button>
+                          {report.listingId ? (
+                            <Button
+                              size="sm"
+                              variant="destructive"
+                              onClick={() => {
+                                const listing = listings.find(l => l.id === report.listingId);
+                                if (listing && confirm(`Удалить объявление "${listing.title}"?`)) {
+                                  removeListing(report.listingId);
+                                  removeReport(report.id);
+                                }
+                              }}
+                            >
+                              <Icon name="Trash2" size={14} className="mr-1" />
+                              Удалить объявление
+                            </Button>
+                          ) : (
+                            <Button
+                              size="sm"
+                              variant="destructive"
+                              onClick={() => {
+                                if (report.reportedUserId && report.reportedUsername && 
+                                    confirm(`Удалить аккаунт ${report.reportedUsername} навсегда?`)) {
+                                  deleteUserAccount(report.reportedUserId);
+                                  removeReport(report.id);
+                                }
+                              }}
+                            >
+                              <Icon name="Trash2" size={14} className="mr-1" />
+                              Удалить аккаунт
+                            </Button>
+                          )}
                           <Button
                             size="sm"
                             variant="outline"
@@ -1165,6 +1462,29 @@ const Index = () => {
             <Button onClick={submitReview} className="w-full">
               <Icon name="Send" size={16} className="mr-2" />
               Отправить отзыв
+            </Button>
+          </div>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={showReportListingDialog} onOpenChange={setShowReportListingDialog}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Пожаловаться на объявление</DialogTitle>
+          </DialogHeader>
+          <div className="space-y-4">
+            <p className="text-sm text-muted-foreground">
+              Укажите причину жалобы. Жалоба будет отправлена в службу поддержки.
+            </p>
+            <Textarea
+              placeholder="Опишите причину жалобы..."
+              value={reportListingReason}
+              onChange={(e) => setReportListingReason(e.target.value)}
+              rows={4}
+            />
+            <Button onClick={submitListingReport} className="w-full">
+              <Icon name="Send" size={16} className="mr-2" />
+              Отправить жалобу
             </Button>
           </div>
         </DialogContent>
