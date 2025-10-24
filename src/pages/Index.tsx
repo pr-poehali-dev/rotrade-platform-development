@@ -133,12 +133,33 @@ const Index = () => {
         loadListings();
       }, 2000);
       
+      const handleStorageChange = (e: StorageEvent) => {
+        if (e.key === 'rotrade_listings') {
+          loadListings();
+        }
+        if (e.key === 'rotrade_messages') {
+          loadChats();
+          if (activeChat) {
+            loadMessages(activeChat);
+          }
+        }
+        if (e.key === 'rotrade_reviews') {
+          loadReviews();
+        }
+        if (e.key === 'rotrade_reports') {
+          loadReports();
+        }
+      };
+      
+      window.addEventListener('storage', handleStorageChange);
+      
       return () => {
         clearInterval(messagesInterval);
         clearInterval(listingsInterval);
+        window.removeEventListener('storage', handleStorageChange);
       };
     }
-  }, [showAuth, chats]);
+  }, [showAuth, chats, activeChat]);
 
   const handleAuth = () => {
     if (!username || !password) {
