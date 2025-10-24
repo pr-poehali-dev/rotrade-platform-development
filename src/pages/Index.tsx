@@ -687,18 +687,11 @@ const Index = () => {
   const getListingTags = (): string[] => {
     const tags = new Set<string>();
     listings.forEach(listing => {
-      const text = `${listing.title} ${listing.description}`.toLowerCase();
-      const words = text.split(/\s+/);
-      words.forEach(word => {
-        if (word.length > 3) {
-          tags.add(word);
-        }
-      });
       if (listing.gameName) {
-        tags.add(listing.gameName.toLowerCase());
+        tags.add(listing.gameName);
       }
     });
-    return Array.from(tags).slice(0, 20);
+    return Array.from(tags).sort();
   };
 
   const getFilteredListings = (): Listing[] => {
@@ -715,9 +708,7 @@ const Index = () => {
 
     if (selectedTag) {
       filtered = filtered.filter(listing => 
-        listing.title.toLowerCase().includes(selectedTag) ||
-        listing.description.toLowerCase().includes(selectedTag) ||
-        listing.gameName?.toLowerCase().includes(selectedTag)
+        listing.gameName === selectedTag
       );
     }
 
