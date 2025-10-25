@@ -131,7 +131,15 @@ const Index = () => {
       
       const listingsInterval = setInterval(() => {
         loadListings();
+      }, 1000);
+      
+      const chatsInterval = setInterval(() => {
+        loadChats();
       }, 2000);
+      
+      const reviewsInterval = setInterval(() => {
+        loadReviews();
+      }, 5000);
       
       const handleStorageChange = (e: StorageEvent) => {
         if (e.key === 'rotrade_listings') {
@@ -151,12 +159,25 @@ const Index = () => {
         }
       };
       
+      const handleFocus = () => {
+        loadListings();
+        loadChats();
+        loadReviews();
+        if (activeChat) {
+          loadMessages(activeChat);
+        }
+      };
+      
       window.addEventListener('storage', handleStorageChange);
+      window.addEventListener('focus', handleFocus);
       
       return () => {
         clearInterval(messagesInterval);
         clearInterval(listingsInterval);
+        clearInterval(chatsInterval);
+        clearInterval(reviewsInterval);
         window.removeEventListener('storage', handleStorageChange);
+        window.removeEventListener('focus', handleFocus);
       };
     }
   }, [showAuth, chats, activeChat]);
@@ -186,6 +207,7 @@ const Index = () => {
       
       users.push(newUser);
       localStorage.setItem('rotrade_users', JSON.stringify(users));
+      window.dispatchEvent(new StorageEvent('storage', { key: 'rotrade_users' }));
       localStorage.setItem('rotrade_user', JSON.stringify(newUser));
       setCurrentUser(newUser);
       setShowAuth(false);
@@ -337,6 +359,7 @@ const Index = () => {
       !(msg.fromUserId === userId && msg.toUserId === currentUser.id)
     );
     localStorage.setItem('rotrade_messages', JSON.stringify(filteredMessages));
+    window.dispatchEvent(new StorageEvent('storage', { key: 'rotrade_messages' }));
     
     if (activeChat === userId) {
       setActiveChat(null);
@@ -379,6 +402,7 @@ const Index = () => {
     const allReports = JSON.parse(localStorage.getItem('rotrade_reports') || '[]');
     allReports.push(report);
     localStorage.setItem('rotrade_reports', JSON.stringify(allReports));
+    window.dispatchEvent(new StorageEvent('storage', { key: 'rotrade_reports' }));
 
     if (supportUser) {
       const supportMessage: Message = {
@@ -392,6 +416,7 @@ const Index = () => {
       const allMessages = JSON.parse(localStorage.getItem('rotrade_messages') || '[]');
       allMessages.push(supportMessage);
       localStorage.setItem('rotrade_messages', JSON.stringify(allMessages));
+      window.dispatchEvent(new StorageEvent('storage', { key: 'rotrade_messages' }));
     }
 
     setReportReason('');
@@ -403,6 +428,7 @@ const Index = () => {
   const removeReport = (reportId: number) => {
     const updated = reports.filter(r => r.id !== reportId);
     localStorage.setItem('rotrade_reports', JSON.stringify(updated));
+    window.dispatchEvent(new StorageEvent('storage', { key: 'rotrade_reports' }));
     setReports(updated);
     toast.success('Жалоба удалена');
   };
@@ -411,14 +437,17 @@ const Index = () => {
     const users = JSON.parse(localStorage.getItem('rotrade_users') || '[]');
     const updatedUsers = users.filter((u: User) => u.id !== userId);
     localStorage.setItem('rotrade_users', JSON.stringify(updatedUsers));
+    window.dispatchEvent(new StorageEvent('storage', { key: 'rotrade_users' }));
 
     const listingsData = JSON.parse(localStorage.getItem('rotrade_listings') || '[]');
     const updatedListings = listingsData.filter((l: Listing) => l.userId !== userId);
     localStorage.setItem('rotrade_listings', JSON.stringify(updatedListings));
+    window.dispatchEvent(new StorageEvent('storage', { key: 'rotrade_listings' }));
     setListings(updatedListings);
 
     const updatedReports = reports.filter(r => r.reportedUserId !== userId);
     localStorage.setItem('rotrade_reports', JSON.stringify(updatedReports));
+    window.dispatchEvent(new StorageEvent('storage', { key: 'rotrade_reports' }));
     setReports(updatedReports);
 
     toast.success('Аккаунт удален навсегда');
@@ -447,6 +476,7 @@ const Index = () => {
     const allReviews = JSON.parse(localStorage.getItem('rotrade_reviews') || '[]');
     allReviews.push(review);
     localStorage.setItem('rotrade_reviews', JSON.stringify(allReviews));
+    window.dispatchEvent(new StorageEvent('storage', { key: 'rotrade_reviews' }));
 
     const userIndex = users.findIndex((u: User) => u.id === activeChat);
     if (userIndex !== -1) {
@@ -455,6 +485,7 @@ const Index = () => {
       users[userIndex].rating = Math.round(avgRating * 10) / 10;
       users[userIndex].reviewsCount = userReviews.length;
       localStorage.setItem('rotrade_users', JSON.stringify(users));
+      window.dispatchEvent(new StorageEvent('storage', { key: 'rotrade_users' }));
     }
 
     setReviewRating(5);
@@ -506,6 +537,7 @@ const Index = () => {
       if (userIndex !== -1) {
         users[userIndex] = updatedUser;
         localStorage.setItem('rotrade_users', JSON.stringify(users));
+        window.dispatchEvent(new StorageEvent('storage', { key: 'rotrade_users' }));
         localStorage.setItem('rotrade_user', JSON.stringify(updatedUser));
         setCurrentUser(updatedUser);
         toast.success('Аватар обновлён!');
@@ -550,6 +582,7 @@ const Index = () => {
     const updated = [...listings, listing];
     setListings(updated);
     localStorage.setItem('rotrade_listings', JSON.stringify(updated));
+    window.dispatchEvent(new StorageEvent('storage', { key: 'rotrade_listings' }));
     setNewListing({ title: '', description: '', imageUrl: '', gameUrl: '' });
     setShowCreateListing(false);
     toast.success('Объявление создано!');
@@ -559,6 +592,7 @@ const Index = () => {
     const updated = listings.filter(l => l.id !== id);
     setListings(updated);
     localStorage.setItem('rotrade_listings', JSON.stringify(updated));
+    window.dispatchEvent(new StorageEvent('storage', { key: 'rotrade_listings' }));
     toast.success('Объявление удалено');
   };
 
@@ -569,6 +603,7 @@ const Index = () => {
     if (listingIndex !== -1) {
       allListings[listingIndex].views = (allListings[listingIndex].views || 0) + 1;
       localStorage.setItem('rotrade_listings', JSON.stringify(allListings));
+      window.dispatchEvent(new StorageEvent('storage', { key: 'rotrade_listings' }));
       setListings(allListings);
     }
   };
@@ -623,6 +658,7 @@ const Index = () => {
     const allMessages = JSON.parse(localStorage.getItem('rotrade_messages') || '[]');
     allMessages.push(message);
     localStorage.setItem('rotrade_messages', JSON.stringify(allMessages));
+    window.dispatchEvent(new StorageEvent('storage', { key: 'rotrade_messages' }));
     setMessages([...messages, message]);
     setMessageInput('');
     setReplyToId(null);
@@ -633,6 +669,7 @@ const Index = () => {
     const allMessages = JSON.parse(localStorage.getItem('rotrade_messages') || '[]');
     const updated = allMessages.filter((m: Message) => m.id !== messageId);
     localStorage.setItem('rotrade_messages', JSON.stringify(updated));
+    window.dispatchEvent(new StorageEvent('storage', { key: 'rotrade_messages' }));
     setMessages(messages.filter(m => m.id !== messageId));
     toast.success('Сообщение удалено');
   };
@@ -662,6 +699,7 @@ const Index = () => {
     const allReports = JSON.parse(localStorage.getItem('rotrade_reports') || '[]');
     allReports.push(report);
     localStorage.setItem('rotrade_reports', JSON.stringify(allReports));
+    window.dispatchEvent(new StorageEvent('storage', { key: 'rotrade_reports' }));
 
     if (supportUser) {
       const supportMessage: Message = {
@@ -675,6 +713,7 @@ const Index = () => {
       const allMessages = JSON.parse(localStorage.getItem('rotrade_messages') || '[]');
       allMessages.push(supportMessage);
       localStorage.setItem('rotrade_messages', JSON.stringify(allMessages));
+      window.dispatchEvent(new StorageEvent('storage', { key: 'rotrade_messages' }));
     }
 
     setReportListingReason('');
