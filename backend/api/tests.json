@@ -1,0 +1,27 @@
+{
+  "tests": [
+    {
+      "name": "Get listings",
+      "method": "GET",
+      "path": "/?action=listings",
+      "expectedStatus": 200,
+      "expectedBody": [],
+      "bodyMatcher": "partial"
+    },
+    {
+      "name": "Register user",
+      "method": "POST",
+      "path": "/?action=register",
+      "body": {
+        "username": "testuser",
+        "password": "test123"
+      },
+      "expectedStatus": 200,
+      "expectedBody": {
+        "id": "number",
+        "username": "string"
+      },
+      "bodyMatcher": "partial"
+    }
+  ]
+}

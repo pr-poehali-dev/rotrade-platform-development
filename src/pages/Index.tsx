@@ -9,6 +9,7 @@ import { Badge } from '@/components/ui/badge';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { toast } from 'sonner';
 import Icon from '@/components/ui/icon';
+import { api } from '@/lib/api';
 
 interface User {
   id: number;
@@ -182,90 +183,96 @@ const Index = () => {
     }
   }, [showAuth, chats, activeChat]);
 
-  const handleAuth = () => {
+  const handleAuth = async () => {
     if (!username || !password) {
       toast.error('Заполните все поля');
       return;
     }
 
-    const users = JSON.parse(localStorage.getItem('rotrade_users') || '[]');
-    
-    if (authMode === 'register') {
-      if (users.find((u: User) => u.username === username)) {
-        toast.error('Это имя уже занято');
-        return;
-      }
-      
-      const newUser: User = {
-        id: Date.now(),
-        username,
-        avatar: `https://api.dicebear.com/7.x/avataaars/svg?seed=${username}`,
-        createdAt: new Date().toISOString(),
-        rating: 0,
-        reviewsCount: 0
-      };
-      
-      users.push(newUser);
-      localStorage.setItem('rotrade_users', JSON.stringify(users));
-      window.dispatchEvent(new StorageEvent('storage', { key: 'rotrade_users' }));
-      localStorage.setItem('rotrade_user', JSON.stringify(newUser));
-      setCurrentUser(newUser);
-      setShowAuth(false);
-      toast.success('Регистрация успешна!');
-    } else {
-      const user = users.find((u: User) => u.username === username);
-      if (user) {
-        localStorage.setItem('rotrade_user', JSON.stringify(user));
-        setCurrentUser(user);
+    try {
+      if (authMode === 'register') {
+        const user = await api.registerUser(username, password);
+        const userWithAvatar = {
+          id: user.id,
+          username: user.username,
+          avatar: user.avatar_url,
+          createdAt: user.created_at,
+          rating: 0,
+          reviewsCount: 0
+        };
+        localStorage.setItem('rotrade_user', JSON.stringify(userWithAvatar));
+        setCurrentUser(userWithAvatar);
+        setShowAuth(false);
+        toast.success('Регистрация успешна!');
+      } else {
+        const user = await api.loginUser(username, password);
+        const userWithAvatar = {
+          id: user.id,
+          username: user.username,
+          avatar: user.avatar_url,
+          createdAt: user.created_at,
+          rating: 0,
+          reviewsCount: 0
+        };
+        localStorage.setItem('rotrade_user', JSON.stringify(userWithAvatar));
+        setCurrentUser(userWithAvatar);
         setShowAuth(false);
         toast.success('Вход выполнен!');
-      } else {
-        toast.error('Неверные данные');
       }
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : 'Ошибка');
     }
   };
 
-  const loadListings = () => {
-    const saved = localStorage.getItem('rotrade_listings');
-    if (saved) {
-      const allListings: Listing[] = JSON.parse(saved);
-      const now = new Date();
-      const validListings = allListings.filter(listing => {
-        const expiresAt = new Date(listing.expiresAt);
-        return expiresAt > now;
+  const loadListings = async () => {
+    try {
+      const apiListings = await api.getListings();
+      const converted = apiListings.map(l => ({
+        id: l.id,
+        userId: l.user_id,
+        username: l.username,
+        title: l.title,
+        description: l.description,
+        imageUrl: l.image_url,
+        gameUrl: l.game_url,
+        gameName: l.game_name,
+        createdAt: l.created_at,
+        expiresAt: new Date(Date.now() + 24 * 24 * 60 * 60 * 1000).toISOString(),
+        views: 0
+      }));
+      setListings(converted);
+    } catch (error) {
+      console.error('Error loading listings:', error);
+    }
+  };
+
+  const loadChats = async () => {
+    if (!currentUser) return;
+    try {
+      const allMessages = await api.getMessages();
+      const allUsers = await api.getUsers();
+      const userChats = new Map<number, Chat>();
+      
+      allMessages.forEach((msg) => {
+        const otherUserId = msg.from_user_id === currentUser.id ? msg.to_user_id : msg.from_user_id;
+        if (msg.from_user_id === currentUser.id || msg.to_user_id === currentUser.id) {
+          const otherUser = allUsers.find((u) => u.id === otherUserId);
+          
+          if (otherUser) {
+            userChats.set(otherUserId, {
+              userId: otherUserId,
+              username: otherUser.username,
+              lastMessage: msg.content,
+              unreadCount: 0
+            });
+          }
+        }
       });
       
-      if (validListings.length !== allListings.length) {
-        localStorage.setItem('rotrade_listings', JSON.stringify(validListings));
-      }
-      
-      setListings(validListings);
+      setChats(Array.from(userChats.values()));
+    } catch (error) {
+      console.error('Error loading chats:', error);
     }
-  };
-
-  const loadChats = () => {
-    if (!currentUser) return;
-    const allMessages = JSON.parse(localStorage.getItem('rotrade_messages') || '[]');
-    const userChats = new Map<number, Chat>();
-    
-    allMessages.forEach((msg: Message) => {
-      const otherUserId = msg.fromUserId === currentUser.id ? msg.toUserId : msg.fromUserId;
-      if (msg.fromUserId === currentUser.id || msg.toUserId === currentUser.id) {
-        const users = JSON.parse(localStorage.getItem('rotrade_users') || '[]');
-        const otherUser = users.find((u: User) => u.id === otherUserId);
-        
-        if (otherUser) {
-          userChats.set(otherUserId, {
-            userId: otherUserId,
-            username: otherUser.username,
-            lastMessage: msg.content,
-            unreadCount: 0
-          });
-        }
-      }
-    });
-    
-    setChats(Array.from(userChats.values()));
   };
 
   const checkNewMessages = () => {
@@ -290,16 +297,44 @@ const Index = () => {
     setBlockedUsers(blocked);
   };
 
-  const loadReports = () => {
+  const loadReports = async () => {
     if (!currentUser) return;
-    const allReports = JSON.parse(localStorage.getItem('rotrade_reports') || '[]');
-    setReports(allReports);
+    try {
+      const apiReports = await api.getReports();
+      const converted = apiReports.map(r => ({
+        id: r.id,
+        reporterId: r.reporter_id,
+        reporterUsername: r.reporter_username,
+        reportedUserId: r.reported_user_id,
+        reportedUsername: r.reported_username,
+        reason: r.reason,
+        createdAt: r.created_at
+      }));
+      setReports(converted);
+    } catch (error) {
+      console.error('Error loading reports:', error);
+    }
   };
 
-  const loadReviews = () => {
-    const allReviews = JSON.parse(localStorage.getItem('rotrade_reviews') || '[]');
-    setReviews(allReviews);
+  const loadReviews = async () => {
+    try {
+      const apiReviews = await api.getReviews();
+      const converted = apiReviews.map(r => ({
+        id: r.id,
+        fromUserId: r.from_user_id,
+        fromUsername: r.from_username,
+        toUserId: r.to_user_id,
+        rating: r.rating,
+        comment: r.comment,
+        createdAt: r.created_at
+      }));
+      setReviews(converted);
+    } catch (error) {
+      console.error('Error loading reviews:', error);
+    }
   };
+
+
 
   const extractGameName = (url: string): string | null => {
     try {
@@ -377,52 +412,37 @@ const Index = () => {
     toast.success('Пользователь разблокирован');
   };
 
-  const submitReport = () => {
+  const submitReport = async () => {
     if (!currentUser || !activeChat || !reportReason.trim()) {
       toast.error('Укажите причину жалобы');
       return;
     }
 
-    const users = JSON.parse(localStorage.getItem('rotrade_users') || '[]');
-    const reportedUser = users.find((u: User) => u.id === activeChat);
-    const supportUser = users.find((u: User) => u.username === SUPPORT_ACCOUNT_NAME);
+    try {
+      await api.createReport({
+        reporterId: currentUser.id,
+        reportedUserId: activeChat,
+        reason: reportReason
+      });
 
-    if (!reportedUser) return;
+      const allUsers = await api.getUsers();
+      const supportUser = allUsers.find((u) => u.username === SUPPORT_ACCOUNT_NAME);
 
-    const report: Report = {
-      id: Date.now(),
-      reporterId: currentUser.id,
-      reporterUsername: currentUser.username,
-      reportedUserId: activeChat,
-      reportedUsername: reportedUser.username,
-      reason: reportReason,
-      createdAt: new Date().toISOString()
-    };
+      if (supportUser) {
+        await api.sendMessage({
+          fromUserId: currentUser.id,
+          toUserId: supportUser.id,
+          content: `Жалоба на пользователя (ID: ${activeChat}): ${reportReason}`
+        });
+      }
 
-    const allReports = JSON.parse(localStorage.getItem('rotrade_reports') || '[]');
-    allReports.push(report);
-    localStorage.setItem('rotrade_reports', JSON.stringify(allReports));
-    window.dispatchEvent(new StorageEvent('storage', { key: 'rotrade_reports' }));
-
-    if (supportUser) {
-      const supportMessage: Message = {
-        id: Date.now() + 1,
-        fromUserId: currentUser.id,
-        toUserId: supportUser.id,
-        content: `Жалоба на пользователя ${reportedUser.username}: ${reportReason}`,
-        createdAt: new Date().toISOString()
-      };
-
-      const allMessages = JSON.parse(localStorage.getItem('rotrade_messages') || '[]');
-      allMessages.push(supportMessage);
-      localStorage.setItem('rotrade_messages', JSON.stringify(allMessages));
-      window.dispatchEvent(new StorageEvent('storage', { key: 'rotrade_messages' }));
+      setReportReason('');
+      setShowReportDialog(false);
+      toast.success('Жалоба отправлена в поддержку');
+      loadReports();
+    } catch (error) {
+      toast.error('Ошибка отправки жалобы');
     }
-
-    setReportReason('');
-    setShowReportDialog(false);
-    toast.success('Жалоба отправлена в поддержку');
-    loadReports();
   };
 
   const removeReport = (reportId: number) => {
@@ -547,7 +567,7 @@ const Index = () => {
     }
   };
 
-  const createListing = () => {
+  const createListing = async () => {
     if (!currentUser || !newListing.title || !newListing.description) {
       toast.error('Заполните все поля');
       return;
@@ -562,38 +582,33 @@ const Index = () => {
       }
     }
 
-    const now = new Date();
-    const expiresAt = new Date(now.getTime() + 24 * 24 * 60 * 60 * 1000);
-
-    const listing: Listing = {
-      id: Date.now(),
-      userId: currentUser.id,
-      username: currentUser.username,
-      title: newListing.title,
-      description: newListing.description,
-      imageUrl: newListing.imageUrl || 'https://images.unsplash.com/photo-1614680376739-414d95ff43df?w=400',
-      gameUrl: newListing.gameUrl,
-      gameName: gameName || undefined,
-      createdAt: now.toISOString(),
-      views: 0,
-      expiresAt: expiresAt.toISOString()
-    };
-
-    const updated = [...listings, listing];
-    setListings(updated);
-    localStorage.setItem('rotrade_listings', JSON.stringify(updated));
-    window.dispatchEvent(new StorageEvent('storage', { key: 'rotrade_listings' }));
-    setNewListing({ title: '', description: '', imageUrl: '', gameUrl: '' });
-    setShowCreateListing(false);
-    toast.success('Объявление создано!');
+    try {
+      await api.createListing({
+        userId: currentUser.id,
+        title: newListing.title,
+        description: newListing.description,
+        imageUrl: newListing.imageUrl || 'https://images.unsplash.com/photo-1614680376739-414d95ff43df?w=400',
+        gameUrl: newListing.gameUrl,
+        gameName: gameName || undefined
+      });
+      
+      await loadListings();
+      setNewListing({ title: '', description: '', imageUrl: '', gameUrl: '' });
+      setShowCreateListing(false);
+      toast.success('Объявление создано!');
+    } catch (error) {
+      toast.error('Ошибка создания объявления');
+    }
   };
 
-  const removeListing = (id: number) => {
-    const updated = listings.filter(l => l.id !== id);
-    setListings(updated);
-    localStorage.setItem('rotrade_listings', JSON.stringify(updated));
-    window.dispatchEvent(new StorageEvent('storage', { key: 'rotrade_listings' }));
-    toast.success('Объявление удалено');
+  const removeListing = async (id: number) => {
+    try {
+      await api.deleteListing(id);
+      await loadListings();
+      toast.success('Объявление удалено');
+    } catch (error) {
+      toast.error('Ошибка удаления');
+    }
   };
 
   const incrementListingViews = (listingId: number) => {
@@ -623,17 +638,28 @@ const Index = () => {
     loadMessages(userId);
   };
 
-  const loadMessages = (userId: number) => {
+  const loadMessages = async (userId: number) => {
     if (!currentUser) return;
-    const allMessages = JSON.parse(localStorage.getItem('rotrade_messages') || '[]');
-    const chatMessages = allMessages.filter((msg: Message) =>
-      (msg.fromUserId === currentUser.id && msg.toUserId === userId) ||
-      (msg.fromUserId === userId && msg.toUserId === currentUser.id)
-    );
-    setMessages(chatMessages);
+    try {
+      const allMessages = await api.getMessages();
+      const chatMessages = allMessages.filter((msg) =>
+        (msg.from_user_id === currentUser.id && msg.to_user_id === userId) ||
+        (msg.from_user_id === userId && msg.to_user_id === currentUser.id)
+      ).map(m => ({
+        id: m.id,
+        fromUserId: m.from_user_id,
+        toUserId: m.to_user_id,
+        content: m.content,
+        replyToId: m.reply_to_id,
+        createdAt: m.created_at
+      }));
+      setMessages(chatMessages);
+    } catch (error) {
+      console.error('Error loading messages:', error);
+    }
   };
 
-  const sendMessage = () => {
+  const sendMessage = async () => {
     if (!currentUser || !activeChat || !messageInput) return;
 
     if (activeChat === currentUser.id) {
@@ -646,32 +672,40 @@ const Index = () => {
       return;
     }
 
-    const message: Message = {
-      id: Date.now(),
-      fromUserId: currentUser.id,
-      toUserId: activeChat,
-      content: messageInput,
-      replyToId: replyToId || undefined,
-      createdAt: new Date().toISOString()
-    };
-
-    const allMessages = JSON.parse(localStorage.getItem('rotrade_messages') || '[]');
-    allMessages.push(message);
-    localStorage.setItem('rotrade_messages', JSON.stringify(allMessages));
-    window.dispatchEvent(new StorageEvent('storage', { key: 'rotrade_messages' }));
-    setMessages([...messages, message]);
-    setMessageInput('');
-    setReplyToId(null);
-    toast.success('Сообщение отправлено');
+    try {
+      const message = await api.sendMessage({
+        fromUserId: currentUser.id,
+        toUserId: activeChat,
+        content: messageInput,
+        replyToId: replyToId || undefined
+      });
+      
+      const converted = {
+        id: message.id,
+        fromUserId: message.from_user_id,
+        toUserId: message.to_user_id,
+        content: message.content,
+        replyToId: message.reply_to_id,
+        createdAt: message.created_at
+      };
+      
+      setMessages([...messages, converted]);
+      setMessageInput('');
+      setReplyToId(null);
+      toast.success('Сообщение отправлено');
+    } catch (error) {
+      toast.error('Ошибка отправки');
+    }
   };
 
-  const deleteMessage = (messageId: number) => {
-    const allMessages = JSON.parse(localStorage.getItem('rotrade_messages') || '[]');
-    const updated = allMessages.filter((m: Message) => m.id !== messageId);
-    localStorage.setItem('rotrade_messages', JSON.stringify(updated));
-    window.dispatchEvent(new StorageEvent('storage', { key: 'rotrade_messages' }));
-    setMessages(messages.filter(m => m.id !== messageId));
-    toast.success('Сообщение удалено');
+  const deleteMessage = async (messageId: number) => {
+    try {
+      await api.deleteMessage(messageId);
+      setMessages(messages.filter(m => m.id !== messageId));
+      toast.success('Сообщение удалено');
+    } catch (error) {
+      toast.error('Ошибка удаления');
+    }
   };
 
   const submitListingReport = () => {
