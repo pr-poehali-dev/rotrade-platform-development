@@ -10,6 +10,8 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { toast } from 'sonner';
 import Icon from '@/components/ui/icon';
 import { api } from '@/lib/api';
+import { useTheme } from '@/contexts/ThemeContext';
+import { playNotificationSound } from '@/lib/sound';
 
 interface User {
   id: number;
@@ -73,6 +75,7 @@ interface Report {
 }
 
 const Index = () => {
+  const { theme, toggleTheme } = useTheme();
   const [currentUser, setCurrentUser] = useState<User | null>(null);
   const [showAuth, setShowAuth] = useState(true);
   const [authMode, setAuthMode] = useState<'login' | 'register'>('login');
@@ -275,19 +278,23 @@ const Index = () => {
     }
   };
 
-  const checkNewMessages = () => {
+  const checkNewMessages = async () => {
     if (!currentUser) return;
-    const allMessages = JSON.parse(localStorage.getItem('rotrade_messages') || '[]');
-    const newMessages = allMessages.filter((msg: Message) => 
-      msg.toUserId === currentUser.id && 
-      !messages.find(m => m.id === msg.id)
-    );
     
-    if (newMessages.length > 0 && soundEnabled) {
-      const audio = new Audio('data:audio/wav;base64,UklGRnoGAABXQVZFZm10IBAAAAABAAEAQB8AAEAfAAABAAgAZGF0YQoGAACBhYqFbF1fdJivrJBhNjVgodDbq2EcBj+a2/LDciUFLIHO8tiJNwgZaLvt559NEAxQp+PwtmMcBjiR1/LMeSwFJHfH8N2QQAoUXrTp66hVFApGn+DyvmwhBSuByvLaizsIGGS36eahUQ4QUqzn77BdGAg+ltryxngsBSh+zPDYjT0JGW26...');
-      audio.play();
-      toast.success('Новое сообщение!');
-      loadChats();
+    try {
+      const allMessages = await api.getMessages();
+      const newMessages = allMessages.filter((msg) => 
+        msg.to_user_id === currentUser.id && 
+        !messages.find(m => m.id === msg.id)
+      );
+      
+      if (newMessages.length > 0 && soundEnabled) {
+        playNotificationSound();
+        toast.success('Новое сообщение!');
+        loadChats();
+      }
+    } catch (error) {
+      console.error('Error checking messages:', error);
     }
   };
 
@@ -863,6 +870,9 @@ const Index = () => {
             RoTrade
           </h1>
           <div className="flex items-center gap-4">
+            <Button variant="ghost" size="sm" onClick={toggleTheme}>
+              <Icon name={theme === 'dark' ? 'Sun' : 'Moon'} size={16} />
+            </Button>
             <Avatar>
               <AvatarImage src={currentUser?.avatar} />
               <AvatarFallback>{currentUser?.username[0]}</AvatarFallback>
@@ -1578,7 +1588,7 @@ const Index = () => {
       <footer className="border-t border-border mt-12 py-8">
         <div className="container mx-auto px-4 text-center">
           <p className="text-sm text-muted-foreground mb-2">
-            © 2024 RoTrade. Торговая площадка для Roblox
+            © 2025 RoTrade. Торговая площадка для Roblox
           </p>
           <p className="text-xs text-destructive font-bold">
             ⚠️ САЙТ НЕ РУЧАЕТСЯ ЗА СДЕЛКИ

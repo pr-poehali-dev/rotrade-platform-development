@@ -270,12 +270,12 @@ def get_messages(user_id: Optional[int]) -> Dict[str, Any]:
     cur = conn.cursor(cursor_factory=RealDictCursor)
     
     if user_id:
-        cur.execute('''
+        cur.execute(f'''
             SELECT m.id, m.from_user_id, m.to_user_id, m.content, m.reply_to_id, m.created_at
             FROM messages m
-            WHERE m.from_user_id = %s OR m.to_user_id = %s
+            WHERE m.from_user_id = {user_id} OR m.to_user_id = {user_id}
             ORDER BY m.created_at ASC
-        ''', (user_id, user_id))
+        ''')
     else:
         cur.execute('''
             SELECT m.id, m.from_user_id, m.to_user_id, m.content, m.reply_to_id, m.created_at
@@ -287,7 +287,7 @@ def get_messages(user_id: Optional[int]) -> Dict[str, Any]:
     
     for message in messages:
         if message['created_at']:
-            message['created_at'] = message['created_at'].isoformat()
+            message['created_at'] = message['created_at'].isoformat() if isinstance(message['created_at'], datetime) else message['created_at']
     
     cur.close()
     conn.close()
@@ -316,14 +316,18 @@ def send_message(data: Dict[str, Any]) -> Dict[str, Any]:
     conn = get_db_connection()
     cur = conn.cursor(cursor_factory=RealDictCursor)
     
-    cur.execute('''
+    content_escaped = content.replace("'", "''")
+    now = datetime.now().isoformat()
+    reply_to_sql = f"{reply_to_id}" if reply_to_id else "NULL"
+    
+    cur.execute(f'''
         INSERT INTO messages (from_user_id, to_user_id, content, reply_to_id, created_at, is_read)
-        VALUES (%s, %s, %s, %s, %s, false)
+        VALUES ({from_user_id}, {to_user_id}, '{content_escaped}', {reply_to_sql}, '{now}', false)
         RETURNING id, from_user_id, to_user_id, content, reply_to_id, created_at
-    ''', (from_user_id, to_user_id, content, reply_to_id, datetime.now()))
+    ''')
     
     message = dict(cur.fetchone())
-    message['created_at'] = message['created_at'].isoformat()
+    message['created_at'] = message['created_at'].isoformat() if isinstance(message['created_at'], datetime) else message['created_at']
     
     conn.commit()
     cur.close()
@@ -403,14 +407,17 @@ def create_report(data: Dict[str, Any]) -> Dict[str, Any]:
     conn = get_db_connection()
     cur = conn.cursor(cursor_factory=RealDictCursor)
     
-    cur.execute('''
+    reason_escaped = reason.replace("'", "''")
+    now = datetime.now().isoformat()
+    
+    cur.execute(f'''
         INSERT INTO reports (reporter_id, reported_user_id, reason, created_at)
-        VALUES (%s, %s, %s, %s)
+        VALUES ({reporter_id}, {reported_user_id}, '{reason_escaped}', '{now}')
         RETURNING id, reporter_id, reported_user_id, reason, created_at
-    ''', (reporter_id, reported_user_id, reason, datetime.now()))
+    ''')
     
     report = dict(cur.fetchone())
-    report['created_at'] = report['created_at'].isoformat()
+    report['created_at'] = report['created_at'].isoformat() if isinstance(report['created_at'], datetime) else report['created_at']
     
     conn.commit()
     cur.close()
