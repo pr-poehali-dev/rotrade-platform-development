@@ -50,38 +50,59 @@ export interface Review {
 
 export const api = {
   async registerUser(username: string, password: string): Promise<User> {
-    const response = await fetch(`${API_URL}?action=register`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ username, password })
-    });
-    
-    if (!response.ok) {
-      const error = await response.json();
-      throw new Error(error.error || 'Registration failed');
+    try {
+      const response = await fetch(`${API_URL}?action=register`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ username, password })
+      });
+      
+      const data = await response.json();
+      
+      if (!response.ok) {
+        throw new Error(data.error || 'Ошибка регистрации');
+      }
+      
+      return data;
+    } catch (error) {
+      console.error('Register error:', error);
+      throw error;
     }
-    
-    return response.json();
   },
 
   async loginUser(username: string, password: string): Promise<User> {
-    const response = await fetch(`${API_URL}?action=login`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ username, password })
-    });
-    
-    if (!response.ok) {
-      const error = await response.json();
-      throw new Error(error.error || 'Login failed');
+    try {
+      const response = await fetch(`${API_URL}?action=login`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ username, password })
+      });
+      
+      const data = await response.json();
+      
+      if (!response.ok) {
+        throw new Error(data.error || 'Ошибка входа');
+      }
+      
+      return data;
+    } catch (error) {
+      console.error('Login error:', error);
+      throw error;
     }
-    
-    return response.json();
   },
 
   async getListings(): Promise<Listing[]> {
-    const response = await fetch(`${API_URL}?action=listings`);
-    return response.json();
+    try {
+      const response = await fetch(`${API_URL}?action=listings`);
+      if (!response.ok) {
+        console.error('Failed to fetch listings:', response.status);
+        return [];
+      }
+      return response.json();
+    } catch (error) {
+      console.error('Get listings error:', error);
+      return [];
+    }
   },
 
   async createListing(data: {
@@ -92,12 +113,24 @@ export const api = {
     gameUrl?: string;
     gameName?: string;
   }): Promise<Listing> {
-    const response = await fetch(`${API_URL}?action=listing`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(data)
-    });
-    return response.json();
+    try {
+      const response = await fetch(`${API_URL}?action=listing`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(data)
+      });
+      
+      const result = await response.json();
+      
+      if (!response.ok) {
+        throw new Error(result.error || 'Ошибка создания объявления');
+      }
+      
+      return result;
+    } catch (error) {
+      console.error('Create listing error:', error);
+      throw error;
+    }
   },
 
   async deleteListing(id: number): Promise<void> {
