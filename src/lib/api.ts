@@ -5,6 +5,7 @@ export interface User {
   username: string;
   avatar_url?: string;
   created_at?: string;
+  coins?: number;
 }
 
 export interface Listing {
@@ -17,6 +18,8 @@ export interface Listing {
   game_url?: string;
   game_name?: string;
   created_at: string;
+  is_featured?: boolean;
+  featured_until?: string;
 }
 
 export interface Message {
@@ -45,6 +48,15 @@ export interface Review {
   to_user_id: number;
   rating: number;
   comment: string;
+  created_at: string;
+}
+
+export interface Deposit {
+  id: number;
+  user_id: number;
+  amount_rub: number;
+  coins_received: number;
+  status: string;
   created_at: string;
 }
 
@@ -187,6 +199,43 @@ export const api = {
 
   async getReviews(userId?: number): Promise<Review[]> {
     const url = userId ? `${API_URL}?action=reviews&userId=${userId}` : `${API_URL}?action=reviews`;
+    const response = await fetch(url);
+    return handleResponse(response);
+  },
+
+  async getUserCoins(userId: number): Promise<{ coins: number }> {
+    const response = await fetch(`${API_URL}?action=user-coins&userId=${userId}`);
+    return handleResponse(response);
+  },
+
+  async createDeposit(data: {
+    userId: number;
+    amountRub: number;
+  }): Promise<Deposit> {
+    const response = await fetch(`${API_URL}?action=deposit`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(data)
+    });
+    
+    return handleResponse(response);
+  },
+
+  async featureListing(data: {
+    userId: number;
+    listingId: number;
+  }): Promise<{ success: boolean }> {
+    const response = await fetch(`${API_URL}?action=feature-listing`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(data)
+    });
+    
+    return handleResponse(response);
+  },
+
+  async getDeposits(userId?: number): Promise<Deposit[]> {
+    const url = userId ? `${API_URL}?action=deposits&userId=${userId}` : `${API_URL}?action=deposits`;
     const response = await fetch(url);
     return handleResponse(response);
   }

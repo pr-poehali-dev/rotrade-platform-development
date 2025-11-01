@@ -20,6 +20,7 @@ interface User {
   createdAt?: string;
   rating?: number;
   reviewsCount?: number;
+  coins?: number;
 }
 
 interface Listing {
@@ -34,6 +35,8 @@ interface Listing {
   createdAt: string;
   views?: number;
   expiresAt: string;
+  isFeatured?: boolean;
+  featuredUntil?: string;
 }
 
 interface Review {
@@ -104,6 +107,7 @@ const Index = () => {
   const [blockedUsers, setBlockedUsers] = useState<number[]>([]);
   const [reports, setReports] = useState<Report[]>([]);
   const [showReviewDialog, setShowReviewDialog] = useState(false);
+  const [depositAmount, setDepositAmount] = useState('');
   const [reviewRating, setReviewRating] = useState(5);
   const [reviewComment, setReviewComment] = useState('');
   const [reviews, setReviews] = useState<Review[]>([]);
@@ -113,13 +117,21 @@ const Index = () => {
   useEffect(() => {
     const user = localStorage.getItem('rotrade_user');
     if (user) {
-      setCurrentUser(JSON.parse(user));
+      const parsedUser = JSON.parse(user);
+      setCurrentUser(parsedUser);
       setShowAuth(false);
       loadListings();
       loadChats();
       loadBlockedUsers();
       loadReports();
       loadReviews();
+      
+      api.getUserCoins(parsedUser.id).then(data => {
+        const updatedUser = { ...parsedUser, coins: data.coins };
+        setCurrentUser(updatedUser);
+        localStorage.setItem('rotrade_user', JSON.stringify(updatedUser));
+      }).catch(() => {});
+      
       const savedSound = localStorage.getItem('rotrade_sound_enabled');
       if (savedSound !== null) {
         setSoundEnabled(JSON.parse(savedSound));
@@ -201,7 +213,8 @@ const Index = () => {
           avatar: user.avatar_url,
           createdAt: user.created_at,
           rating: 0,
-          reviewsCount: 0
+          reviewsCount: 0,
+          coins: user.coins || 0
         };
         localStorage.setItem('rotrade_user', JSON.stringify(userWithAvatar));
         setCurrentUser(userWithAvatar);
@@ -215,7 +228,8 @@ const Index = () => {
           avatar: user.avatar_url,
           createdAt: user.created_at,
           rating: 0,
-          reviewsCount: 0
+          reviewsCount: 0,
+          coins: user.coins || 0
         };
         localStorage.setItem('rotrade_user', JSON.stringify(userWithAvatar));
         setCurrentUser(userWithAvatar);
@@ -241,7 +255,9 @@ const Index = () => {
         gameName: l.game_name,
         createdAt: l.created_at,
         expiresAt: new Date(Date.now() + 24 * 24 * 60 * 60 * 1000).toISOString(),
-        views: 0
+        views: 0,
+        isFeatured: l.is_featured,
+        featuredUntil: l.featured_until
       }));
       setListings(converted);
     } catch (error) {
@@ -618,6 +634,61 @@ const Index = () => {
     }
   };
 
+  const handleDeposit = async () => {
+    if (!currentUser || !depositAmount) {
+      toast.error('Введите сумму');
+      return;
+    }
+
+    const amount = parseFloat(depositAmount);
+    if (isNaN(amount) || amount < 1) {
+      toast.error('Минимальная сумма 1 рубль');
+      return;
+    }
+
+    try {
+      const deposit = await api.createDeposit({
+        userId: currentUser.id,
+        amountRub: amount
+      });
+      
+      const updatedUser = { ...currentUser, coins: (currentUser.coins || 0) + deposit.coins_received };
+      setCurrentUser(updatedUser);
+      localStorage.setItem('rotrade_user', JSON.stringify(updatedUser));
+      
+      toast.success(`Пополнено! Получено ${deposit.coins_received} монет`);
+      setDepositAmount('');
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : 'Ошибка пополнения');
+    }
+  };
+
+  const handleFeatureListing = async (listingId: number) => {
+    if (!currentUser) return;
+
+    if ((currentUser.coins || 0) < 10) {
+      toast.error('Недостаточно монет. Пополните баланс.');
+      setActiveTab('deposit');
+      return;
+    }
+
+    try {
+      await api.featureListing({
+        userId: currentUser.id,
+        listingId
+      });
+
+      const updatedUser = { ...currentUser, coins: (currentUser.coins || 0) - 10 };
+      setCurrentUser(updatedUser);
+      localStorage.setItem('rotrade_user', JSON.stringify(updatedUser));
+
+      await loadListings();
+      toast.success('Объявление размещено на главной!');
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : 'Ошибка');
+    }
+  };
+
   const incrementListingViews = (listingId: number) => {
     const allListings = JSON.parse(localStorage.getItem('rotrade_listings') || '[]');
     const listingIndex = allListings.findIndex((l: Listing) => l.id === listingId);
@@ -886,7 +957,7 @@ const Index = () => {
       </header>
 
       <Tabs value={activeTab} onValueChange={setActiveTab} className="container mx-auto px-4 py-8">
-        <TabsList className={`grid w-full ${currentUser?.username === SUPPORT_ACCOUNT_NAME ? 'grid-cols-6' : 'grid-cols-5'} mb-8`}>
+        <TabsList className={`grid w-full ${currentUser?.username === SUPPORT_ACCOUNT_NAME ? 'grid-cols-7' : 'grid-cols-6'} mb-8`}>
           <TabsTrigger value="home">
             <Icon name="Home" size={16} className="mr-2" />
             Главная
@@ -901,6 +972,11 @@ const Index = () => {
             {getUserListings().length > 0 && (
               <Badge className="ml-2" variant="secondary">{getUserListings().length}</Badge>
             )}
+          </TabsTrigger>
+          <TabsTrigger value="deposit">
+            <Icon name="Coins" size={16} className="mr-2" />
+            Пополнить
+            <Badge className="ml-2 bg-yellow-500">{currentUser?.coins || 0}</Badge>
           </TabsTrigger>
           <TabsTrigger value="chats">
             <Icon name="MessageSquare" size={16} className="mr-2" />
@@ -945,7 +1021,15 @@ const Index = () => {
                     className="w-full h-48 object-cover"
                   />
                   <div className="p-4">
-                    <h3 className="font-bold mb-2">{listing.title}</h3>
+                    <div className="flex items-start justify-between gap-2 mb-2">
+                      <h3 className="font-bold">{listing.title}</h3>
+                      {listing.isFeatured && (
+                        <Badge className="bg-yellow-500">
+                          <Icon name="Star" size={12} className="mr-1" />
+                          VIP
+                        </Badge>
+                      )}
+                    </div>
                     {listing.gameName && (
                       <Badge className="mb-2" variant="secondary">
                         <Icon name="Gamepad2" size={12} className="mr-1" />
@@ -1015,7 +1099,15 @@ const Index = () => {
                     className="w-full h-48 object-cover"
                   />
                   <div className="p-4">
-                    <h3 className="font-bold mb-2">{listing.title}</h3>
+                    <div className="flex items-start justify-between gap-2 mb-2">
+                      <h3 className="font-bold">{listing.title}</h3>
+                      {listing.isFeatured && (
+                        <Badge className="bg-yellow-500">
+                          <Icon name="Star" size={12} className="mr-1" />
+                          VIP
+                        </Badge>
+                      )}
+                    </div>
                     {listing.gameName && (
                       <Badge className="mb-2" variant="secondary">
                         <Icon name="Gamepad2" size={12} className="mr-1" />
@@ -1085,7 +1177,15 @@ const Index = () => {
                     className="w-full h-48 object-cover"
                   />
                   <div className="p-4 space-y-3">
-                    <h3 className="font-bold">{listing.title}</h3>
+                    <div className="flex items-start justify-between gap-2">
+                      <h3 className="font-bold">{listing.title}</h3>
+                      {listing.isFeatured && (
+                        <Badge className="bg-yellow-500">
+                          <Icon name="Star" size={12} className="mr-1" />
+                          VIP
+                        </Badge>
+                      )}
+                    </div>
                     {listing.gameName && (
                       <Badge variant="secondary">
                         <Icon name="Gamepad2" size={12} className="mr-1" />
@@ -1105,6 +1205,22 @@ const Index = () => {
                         <span>{getTimeUntilExpiration(listing.expiresAt)}</span>
                       </div>
                     </div>
+                    {!listing.isFeatured && (
+                      <Button
+                        size="sm"
+                        variant="default"
+                        className="w-full bg-yellow-500 hover:bg-yellow-600"
+                        onClick={() => handleFeatureListing(listing.id)}
+                      >
+                        <Icon name="Star" size={14} className="mr-2" />
+                        На главную за 10 монет
+                      </Button>
+                    )}
+                    {listing.isFeatured && listing.featuredUntil && (
+                      <p className="text-xs text-center text-muted-foreground">
+                        На главной до {new Date(listing.featuredUntil).toLocaleDateString()}
+                      </p>
+                    )}
                     <Button
                       size="sm"
                       variant="destructive"
@@ -1351,6 +1467,58 @@ const Index = () => {
             </Card>
           </TabsContent>
         )}
+
+        <TabsContent value="deposit">
+          <Card className="max-w-2xl mx-auto p-8">
+            <div className="text-center space-y-6">
+              <Icon name="Coins" size={64} className="mx-auto text-yellow-500" />
+              <h2 className="text-3xl font-bold">Пополнение баланса</h2>
+              <div className="bg-muted p-6 rounded-lg">
+                <p className="text-4xl font-bold text-yellow-500">{currentUser?.coins || 0} монет</p>
+                <p className="text-sm text-muted-foreground mt-2">Ваш текущий баланс</p>
+              </div>
+              
+              <div className="space-y-4">
+                <div>
+                  <p className="text-lg font-semibold mb-4">1 ₽ = 1.7 монет</p>
+                  <Input
+                    type="number"
+                    placeholder="Введите сумму в рублях"
+                    value={depositAmount}
+                    onChange={(e) => setDepositAmount(e.target.value)}
+                    min="1"
+                    className="text-center text-lg"
+                  />
+                  {depositAmount && parseFloat(depositAmount) >= 1 && (
+                    <p className="text-sm text-muted-foreground mt-2">
+                      Вы получите: <span className="font-bold text-yellow-500">
+                        {Math.floor(parseFloat(depositAmount) * 1.7)} монет
+                      </span>
+                    </p>
+                  )}
+                </div>
+                
+                <Button onClick={handleDeposit} className="w-full" size="lg">
+                  <Icon name="CreditCard" size={20} className="mr-2" />
+                  Пополнить баланс
+                </Button>
+              </div>
+
+              <div className="border-t pt-6 space-y-4">
+                <h3 className="text-xl font-semibold">Как использовать монеты?</h3>
+                <div className="bg-blue-50 dark:bg-blue-950 p-4 rounded-lg text-left">
+                  <p className="flex items-center gap-2 text-sm">
+                    <Icon name="Star" size={16} className="text-yellow-500" />
+                    <span><strong>10 монет</strong> — разместить объявление на главной странице на 7 дней</span>
+                  </p>
+                </div>
+                <p className="text-sm text-muted-foreground">
+                  Объявления на главной странице видят все пользователи в первую очередь
+                </p>
+              </div>
+            </div>
+          </Card>
+        </TabsContent>
 
         <TabsContent value="profile">
           <Card className="max-w-2xl mx-auto p-8">

@@ -45,6 +45,12 @@ def handler(event: Dict[str, Any], context: Any) -> Dict[str, Any]:
             elif path == 'reviews':
                 user_id = event.get('queryStringParameters', {}).get('userId')
                 return get_reviews(int(user_id) if user_id else None)
+            elif path == 'user-coins':
+                user_id = event.get('queryStringParameters', {}).get('userId')
+                return get_user_coins(int(user_id) if user_id else None)
+            elif path == 'deposits':
+                user_id = event.get('queryStringParameters', {}).get('userId')
+                return get_deposits(int(user_id) if user_id else None)
         
         elif method == 'POST':
             body = json.loads(event.get('body', '{}'))
@@ -61,6 +67,10 @@ def handler(event: Dict[str, Any], context: Any) -> Dict[str, Any]:
                 return create_report(body)
             elif path == 'review':
                 return create_review(body)
+            elif path == 'deposit':
+                return create_deposit(body)
+            elif path == 'feature-listing':
+                return feature_listing(body)
         
         elif method == 'DELETE':
             if path == 'listing':
@@ -91,11 +101,12 @@ def get_listings() -> Dict[str, Any]:
     
     cur.execute('''
         SELECT l.id, l.user_id, u.username, l.title, l.description, 
-               l.image_url, l.game_url, l.game_name, l.created_at
+               l.image_url, l.game_url, l.game_name, l.created_at,
+               l.is_featured, l.featured_until
         FROM listings l
         JOIN users u ON l.user_id = u.id
         WHERE l.is_active = true
-        ORDER BY l.created_at DESC
+        ORDER BY l.is_featured DESC, l.created_at DESC
     ''')
     
     listings = [dict(row) for row in cur.fetchall()]
@@ -103,6 +114,10 @@ def get_listings() -> Dict[str, Any]:
     for listing in listings:
         if listing['created_at']:
             listing['created_at'] = listing['created_at'].isoformat()
+        if listing.get('featured_until'):
+            listing['featured_until'] = listing['featured_until'].isoformat()
+        else:
+            listing['featured_until'] = None
     
     cur.close()
     conn.close()
@@ -143,9 +158,9 @@ def register_user(data: Dict[str, Any]) -> Dict[str, Any]:
     avatar_url = f'https://api.dicebear.com/7.x/avataaars/svg?seed={username}'
     
     cur.execute('''
-        INSERT INTO users (username, password_hash, avatar_url, created_at, reports_count, is_removed)
-        VALUES (%s, %s, %s, %s, 0, false)
-        RETURNING id, username, avatar_url, created_at
+        INSERT INTO users (username, password_hash, avatar_url, created_at, reports_count, is_removed, coins)
+        VALUES (%s, %s, %s, %s, 0, false, 0)
+        RETURNING id, username, avatar_url, created_at, coins
     ''', (username, password, avatar_url, datetime.now()))
     
     user = dict(cur.fetchone())
@@ -170,7 +185,7 @@ def login_user(data: Dict[str, Any]) -> Dict[str, Any]:
     cur = conn.cursor(cursor_factory=RealDictCursor)
     
     cur.execute('''
-        SELECT id, username, avatar_url, created_at
+        SELECT id, username, avatar_url, created_at, coins
         FROM users
         WHERE username = %s AND password_hash = %s
     ''', (username, password))
@@ -362,6 +377,183 @@ def delete_message(message_id: Optional[int]) -> Dict[str, Any]:
         'statusCode': 200,
         'headers': {'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*'},
         'body': json.dumps({'success': True}),
+        'isBase64Encoded': False
+    }
+
+def create_deposit(data: Dict[str, Any]) -> Dict[str, Any]:
+    user_id = data.get('userId')
+    amount_rub = data.get('amountRub')
+    
+    if not user_id or not amount_rub:
+        return {
+            'statusCode': 400,
+            'headers': {'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*'},
+            'body': json.dumps({'error': 'Missing required fields'}),
+            'isBase64Encoded': False
+        }
+    
+    coins_received = int(float(amount_rub) * 1.7)
+    
+    conn = get_db_connection()
+    cur = conn.cursor(cursor_factory=RealDictCursor)
+    
+    cur.execute('''
+        INSERT INTO deposits (user_id, amount_rub, coins_received, status, created_at)
+        VALUES (%s, %s, %s, 'completed', %s)
+        RETURNING id, user_id, amount_rub, coins_received, status, created_at
+    ''', (user_id, amount_rub, coins_received, datetime.now()))
+    
+    deposit = dict(cur.fetchone())
+    
+    cur.execute('UPDATE users SET coins = coins + %s WHERE id = %s', (coins_received, user_id))
+    
+    cur.execute('''
+        INSERT INTO coin_transactions (user_id, amount, type, description, created_at)
+        VALUES (%s, %s, 'deposit', 'Пополнение баланса', %s)
+    ''', (user_id, coins_received, datetime.now()))
+    
+    deposit['created_at'] = deposit['created_at'].isoformat()
+    
+    conn.commit()
+    cur.close()
+    conn.close()
+    
+    return {
+        'statusCode': 200,
+        'headers': {'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*'},
+        'body': json.dumps(deposit),
+        'isBase64Encoded': False
+    }
+
+def feature_listing(data: Dict[str, Any]) -> Dict[str, Any]:
+    user_id = data.get('userId')
+    listing_id = data.get('listingId')
+    
+    if not user_id or not listing_id:
+        return {
+            'statusCode': 400,
+            'headers': {'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*'},
+            'body': json.dumps({'error': 'Missing required fields'}),
+            'isBase64Encoded': False
+        }
+    
+    conn = get_db_connection()
+    cur = conn.cursor(cursor_factory=RealDictCursor)
+    
+    cur.execute('SELECT coins FROM users WHERE id = %s', (user_id,))
+    user = cur.fetchone()
+    
+    if not user or user['coins'] < 10:
+        cur.close()
+        conn.close()
+        return {
+            'statusCode': 400,
+            'headers': {'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*'},
+            'body': json.dumps({'error': 'Недостаточно монет'}),
+            'isBase64Encoded': False
+        }
+    
+    featured_until = datetime.now() + timedelta(days=7)
+    
+    cur.execute('''
+        UPDATE listings 
+        SET is_featured = true, featured_until = %s 
+        WHERE id = %s AND user_id = %s
+        RETURNING id
+    ''', (featured_until, listing_id, user_id))
+    
+    if not cur.fetchone():
+        cur.close()
+        conn.close()
+        return {
+            'statusCode': 404,
+            'headers': {'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*'},
+            'body': json.dumps({'error': 'Listing not found'}),
+            'isBase64Encoded': False
+        }
+    
+    cur.execute('UPDATE users SET coins = coins - 10 WHERE id = %s', (user_id,))
+    
+    cur.execute('''
+        INSERT INTO coin_transactions (user_id, amount, type, description, created_at)
+        VALUES (%s, -10, 'feature', 'Размещение на главной', %s)
+    ''', (user_id, datetime.now()))
+    
+    conn.commit()
+    cur.close()
+    conn.close()
+    
+    return {
+        'statusCode': 200,
+        'headers': {'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*'},
+        'body': json.dumps({'success': True}),
+        'isBase64Encoded': False
+    }
+
+def get_user_coins(user_id: Optional[int]) -> Dict[str, Any]:
+    if not user_id:
+        return {
+            'statusCode': 400,
+            'headers': {'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*'},
+            'body': json.dumps({'error': 'User ID required'}),
+            'isBase64Encoded': False
+        }
+    
+    conn = get_db_connection()
+    cur = conn.cursor(cursor_factory=RealDictCursor)
+    
+    cur.execute('SELECT coins FROM users WHERE id = %s', (user_id,))
+    user = cur.fetchone()
+    
+    cur.close()
+    conn.close()
+    
+    if not user:
+        return {
+            'statusCode': 404,
+            'headers': {'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*'},
+            'body': json.dumps({'error': 'User not found'}),
+            'isBase64Encoded': False
+        }
+    
+    return {
+        'statusCode': 200,
+        'headers': {'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*'},
+        'body': json.dumps({'coins': user['coins']}),
+        'isBase64Encoded': False
+    }
+
+def get_deposits(user_id: Optional[int]) -> Dict[str, Any]:
+    conn = get_db_connection()
+    cur = conn.cursor(cursor_factory=RealDictCursor)
+    
+    if user_id:
+        cur.execute('''
+            SELECT id, user_id, amount_rub, coins_received, status, created_at
+            FROM deposits
+            WHERE user_id = %s
+            ORDER BY created_at DESC
+        ''', (user_id,))
+    else:
+        cur.execute('''
+            SELECT id, user_id, amount_rub, coins_received, status, created_at
+            FROM deposits
+            ORDER BY created_at DESC
+        ''')
+    
+    deposits = [dict(row) for row in cur.fetchall()]
+    
+    for deposit in deposits:
+        if deposit['created_at']:
+            deposit['created_at'] = deposit['created_at'].isoformat()
+    
+    cur.close()
+    conn.close()
+    
+    return {
+        'statusCode': 200,
+        'headers': {'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*'},
+        'body': json.dumps(deposits),
         'isBase64Encoded': False
     }
 
